@@ -13,6 +13,7 @@ dependencies = []
 dev = [
     "basedpyright",
     "prek",
+    "pytest>=9.1.1",
     "ruff",
 ]
 
