@@ -9,8 +9,11 @@ implemented. Clearly distinguish implemented behavior from planned work.
 - `parse_module_yaml` uses StrictYAML to read the supported YAML subset, then
   validates decoded values with the existing Pydantic records. Reading is
   read-only; no editor/document object is exposed.
-- Untagged scalar values remain text. Domain validators handle IDs and paths;
-  do not add implicit YAML scalar typing.
+- Untagged scalar values remain text. Source-record validators handle IDs and
+  paths; do not add implicit YAML scalar typing. Internal reference constructors
+  assume values have already been validated by source records; they are not
+  input-validation boundaries. The package-ID reference lowercases its value to
+  provide case-insensitive identity.
 - `EmptyableList[T]` in `rimpack.sdk._validation` is an opt-in Pydantic tuple
   alias. Its before-validator changes only the exactly empty string `""` to an
   empty list before tuple validation. It preserves fail-fast item validation.

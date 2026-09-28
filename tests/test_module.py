@@ -235,6 +235,9 @@ def test_reference_values_preserve_source_and_canonicalize_pid_identity() -> Non
     assert original.reference.value == "some.author.mod"
     assert hash(original.reference) == hash(lower.reference)
 
+    unchecked = PidReference("Not A Valid Package ID")
+    assert unchecked.value == "not a valid package id"
+
 
 @pytest.mark.parametrize("value", ["", '"has space"', '"M\\u00fcd"'])
 def test_rejects_non_ascii_or_whitespace_package_ids(

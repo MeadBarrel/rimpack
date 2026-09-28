@@ -72,8 +72,8 @@ class PidReference:
     value: str
 
     def __post_init__(self) -> None:
-        """Validate and lowercase the value so equality and hashing are canonical."""
-        object.__setattr__(self, "value", _validated_package_id(self.value).lower())
+        """Lowercase the trusted value so equality and hashing are canonical."""
+        object.__setattr__(self, "value", self.value.lower())
 
 
 @dataclass(frozen=True)
