@@ -11,24 +11,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
-import yaml
-from pydantic import (
-    ConfigDict,
-    FailFast,
-    StrictStr,
-    ValidationError,
-    field_validator,
-)
+from pydantic import ConfigDict, StrictStr, ValidationError, field_validator
 from pydantic.dataclasses import dataclass as validated_dataclass
-from yaml.constructor import ConstructorError
-from yaml.nodes import MappingNode, Node, ScalarNode
+from strictyaml import YAMLError, load
+from strictyaml.ruamel.reader import ReaderError
 
-from rimpack.sdk._validation import SelectByRequiredField
+from rimpack.sdk._validation import EmptyableList, SelectByRequiredField
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _DECIMAL_PATTERN = re.compile(r"[0-9]+\Z")
-_YAML_BOOL_PATTERN = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
-_YAML_INTEGER_PATTERN = re.compile(r"^[-+]?(?:0|[1-9][0-9]*(?:_[0-9]+)*)$")
 _UINT64_MAX = 18_446_744_073_709_551_615
 _UINT64_MAX_TEXT = str(_UINT64_MAX)
 
@@ -223,9 +214,8 @@ class AlsModReferenced(_AlsRecordBase):
 ReferencedModRecord = (
     PidModReferenced | WidModReferenced | LocModReferenced | AlsModReferenced
 )
-ReferencedModRecords = Annotated[
-    tuple[Annotated[ReferencedModRecord, SelectByRequiredField()], ...],
-    FailFast(),
+ReferencedModRecords = EmptyableList[
+    Annotated[ReferencedModRecord, SelectByRequiredField()]
 ]
 
 
@@ -262,18 +252,19 @@ class AlsModRecord(_AlsRecordBase, ModOrderingConstraints):
 
 
 ModRecord = PidModRecord | WidModRecord | LocModRecord | AlsModRecord
-ModRecords = Annotated[
-    tuple[Annotated[ModRecord, SelectByRequiredField()], ...],
-    FailFast(),
-]
+ModRecords = EmptyableList[Annotated[ModRecord, SelectByRequiredField()]]
 
 
 @validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class Module:
-    """A named module and its ordered, immutable sequence of mod entries."""
+    """A named module with an ordered, immutable mod sequence.
+
+    ``mods`` defaults to an empty tuple. An exactly empty string is also accepted
+    as an empty collection by the ``EmptyableList`` validation type.
+    """
 
     name: StrictStr
-    mods: ModRecords
+    mods: ModRecords = ()
 
     @field_validator("name")
     @classmethod
@@ -312,121 +303,6 @@ class ModuleParseError(ValueError):
         return f"{source}: {self.location}: {self.message}"
 
 
-class _UniqueKeySafeLoader(yaml.SafeLoader):
-    """Safe loader with predictable scalar, duplicate-key, and merge semantics."""
-
-    yaml_implicit_resolvers = {
-        first: [
-            (tag, pattern)
-            for tag, pattern in resolvers
-            if tag not in {"tag:yaml.org,2002:bool", "tag:yaml.org,2002:int"}
-        ]
-        for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
-    }
-
-    def construct_mapping(
-        self, node: MappingNode, deep: bool = False
-    ) -> dict[Any, Any]:
-        """Construct a mapping only after checking key uniqueness and merge use."""
-        if not isinstance(node, MappingNode):
-            raise ConstructorError(
-                None, None, "expected a mapping node", node.start_mark
-            )
-        mapping: dict[Any, Any] = {}
-        for key_node, value_node in node.value:
-            if key_node.tag == "tag:yaml.org,2002:merge":
-                raise ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "YAML merge keys are not supported",
-                    key_node.start_mark,
-                )
-            key = self.construct_object(key_node, deep=deep)
-            try:
-                duplicate = key in mapping
-            except TypeError as exc:
-                raise ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    "unhashable mapping key",
-                    key_node.start_mark,
-                ) from exc
-            if duplicate:
-                raise ConstructorError(
-                    "while constructing a mapping",
-                    node.start_mark,
-                    f"duplicate key {key!r}",
-                    key_node.start_mark,
-                )
-            mapping[key] = self.construct_object(value_node, deep=deep)
-        return mapping
-
-
-def _construct_decimal_integer(loader: _UniqueKeySafeLoader, node: ScalarNode) -> int:
-    """Construct explicit integer tags only when they use supported decimal syntax."""
-    value = loader.construct_scalar(node)
-    if _YAML_INTEGER_PATTERN.fullmatch(value) is None:
-        raise ConstructorError(
-            "while constructing a decimal integer",
-            node.start_mark,
-            "only decimal integer syntax is supported",
-            node.start_mark,
-        )
-    try:
-        return int(value.replace("_", ""), 10)
-    except ValueError as error:
-        raise ConstructorError(
-            "while constructing a decimal integer",
-            node.start_mark,
-            "decimal integer exceeds the supported conversion size",
-            node.start_mark,
-        ) from error
-
-
-def _reject_tagged_collection(_loader: _UniqueKeySafeLoader, node: Node) -> NoReturn:
-    """Reject YAML set, ordered-map, and pair tags outside the module schema."""
-    raise ConstructorError(
-        "while constructing a module collection",
-        node.start_mark,
-        f"YAML collection tag {node.tag!r} is not supported",
-        node.start_mark,
-    )
-
-
-def _construct_yaml_timestamp(
-    loader: _UniqueKeySafeLoader, node: ScalarNode
-) -> object:
-    """Preserve SafeLoader timestamps while marking invalid dates as YAML errors."""
-    try:
-        return loader.construct_yaml_timestamp(node)
-    except ValueError as error:
-        raise ConstructorError(
-            "while constructing a YAML timestamp",
-            node.start_mark,
-            f"invalid YAML timestamp: {error}",
-            node.start_mark,
-        ) from error
-
-
-_UniqueKeySafeLoader.add_constructor(
-    "tag:yaml.org,2002:int", _construct_decimal_integer
-)
-_UniqueKeySafeLoader.add_constructor(
-    "tag:yaml.org,2002:timestamp", _construct_yaml_timestamp
-)
-for _tagged_collection in (
-    "tag:yaml.org,2002:set",
-    "tag:yaml.org,2002:omap",
-    "tag:yaml.org,2002:pairs",
-):
-    _UniqueKeySafeLoader.add_constructor(_tagged_collection, _reject_tagged_collection)
-_UniqueKeySafeLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:bool", _YAML_BOOL_PATTERN, list("tTfF")
-)
-_UniqueKeySafeLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:int", _YAML_INTEGER_PATTERN, list("-+0123456789")
-)
-
 def _raise_validation_error(path: Path, error: ValidationError) -> NoReturn:
     """Raise an aggregate validation error without raw input or branch ranking.
 
@@ -439,10 +315,13 @@ def _raise_validation_error(path: Path, error: ValidationError) -> NoReturn:
         include_context=False,
         include_input=False,
     )
-    message = "\n".join(
-        f"{tuple(detail['loc'])!r}: {detail['msg']} [{detail['type']}]"
-        for detail in details
-    ) or "Validation failed without structured error details"
+    message = (
+        "\n".join(
+            f"{tuple(detail['loc'])!r}: {detail['msg']} [{detail['type']}]"
+            for detail in details
+        )
+        or "Validation failed without structured error details"
+    )
     raise ModuleParseError(path, "$", message) from None
 
 
@@ -456,33 +335,16 @@ def _mapping_at(value: object, path: Path) -> dict[str, Any]:
     return value
 
 
-def _has_recursive_container(value: object) -> bool:
-    """Detect recursive list/mapping aliases while allowing shared acyclic values."""
-    active: set[int] = set()
-    complete: set[int] = set()
-
-    def visit(container: object) -> bool:
-        """Return whether this container reaches itself through nested values."""
-        if not isinstance(container, (dict, list)):
-            return False
-        identity = id(container)
-        if identity in active:
-            return True
-        if identity in complete:
-            return False
-        active.add(identity)
-        children = container.values() if isinstance(container, dict) else container
-        if any(visit(child) for child in children):
-            return True
-        active.remove(identity)
-        complete.add(identity)
-        return False
-
-    return visit(value)
+def _empty_yaml_document(source: str) -> bool:
+    """Return whether the source contains only whitespace and whole-line comments."""
+    return all(
+        not line.strip() or line.lstrip().startswith("#")
+        for line in source.splitlines()
+    )
 
 
-def _yaml_error(path: Path, error: yaml.YAMLError) -> ModuleParseError:
-    """Convert a PyYAML error and any available mark into a parser error."""
+def _yaml_error(path: Path, error: YAMLError) -> ModuleParseError:
+    """Convert a StrictYAML error and any available source mark to a parse error."""
     mark = getattr(error, "problem_mark", None) or getattr(error, "context_mark", None)
     message = getattr(error, "problem", None) or str(error).splitlines()[0]
     return ModuleParseError(
@@ -495,11 +357,12 @@ def _yaml_error(path: Path, error: yaml.YAMLError) -> ModuleParseError:
 
 
 def parse_module_yaml(path: str | Path) -> Module:
-    """Parse one UTF-8 module YAML file into a complete immutable Module.
+    """Parse one strict-subset YAML module file into an immutable Module.
 
-    Local ``loc`` values stay unresolved and relative to their eventual
-    modpack-root resolution step. Invalid input raises ``ModuleParseError``;
-    no partial module is returned. Filesystem access errors are left as ``OSError``.
+    Scalar text stays lexical during parsing. Missing or exactly blank collection
+    fields become empty tuples; local ``loc`` values remain unresolved relative
+    to their eventual modpack-root resolution step. Invalid input raises
+    ``ModuleParseError``; filesystem access errors remain ``OSError`` subclasses.
     """
     source_path = Path(path)
     try:
@@ -509,33 +372,30 @@ def parse_module_yaml(path: str | Path) -> Module:
             source_path, "$", "module file is not valid UTF-8"
         ) from error
 
-    try:
-        documents = list(yaml.load_all(source_text, Loader=_UniqueKeySafeLoader))
-    except yaml.YAMLError as error:
-        raise _yaml_error(source_path, error) from error
-    except RecursionError as error:
-        raise ModuleParseError(source_path, "$", "YAML nesting is too deep") from error
-    if len(documents) != 1:
-        raise ModuleParseError(source_path, "$", "expected exactly one YAML document")
-    document = documents[0]
-    if document is None:
+    if _empty_yaml_document(source_text):
         raise ModuleParseError(
             source_path, "$", "module YAML document must not be empty"
         )
+
     try:
-        contains_cycle = _has_recursive_container(document)
+        document = load(source_text).data
+    except YAMLError as error:
+        raise _yaml_error(source_path, error) from error
+    except AttributeError as error:
+        reader_error = error.__context__
+        if not isinstance(reader_error, ReaderError):
+            raise
+        raise _yaml_error(source_path, reader_error) from error
     except RecursionError as error:
         raise ModuleParseError(source_path, "$", "YAML nesting is too deep") from error
-    if contains_cycle:
-        raise ModuleParseError(
-            source_path, "$", "recursive YAML aliases are not supported"
-        )
 
     raw_module = _mapping_at(document, source_path)
     try:
         return Module(**raw_module)
     except ValidationError as error:
         _raise_validation_error(source_path, error)
+    except RecursionError as error:
+        raise ModuleParseError(source_path, "$", "YAML nesting is too deep") from error
     except TypeError as error:
         raise ModuleParseError(
             source_path, "$", "could not construct a module from the YAML mapping"

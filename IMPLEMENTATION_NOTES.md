@@ -1,39 +1,45 @@
 # Implementation notes
 
 Technical decisions, library constraints, and implementation caveats belong here.
-Specifications describe product intent; these notes do not silently change their
-requirements. Mark planned guidance explicitly until it is implemented.
+Specifications describe product intent; these notes record how that behavior is
+implemented. Clearly distinguish implemented behavior from planned work.
 
-## Configuration reading and editing (planned)
+## Module YAML reading (implemented)
 
-Use StrictYAML for reading and validation, and ruamel.yaml for comment-aware
-editing. This is the intended implementation direction, not current behavior.
+- `parse_module_yaml` uses StrictYAML to read the supported YAML subset, then
+  validates decoded values with the existing Pydantic records. Reading is
+  read-only; no editor/document object is exposed.
+- Untagged scalar values remain text. Domain validators handle IDs and paths;
+  do not add implicit YAML scalar typing.
+- `EmptyableList[T]` in `rimpack.sdk._validation` is an opt-in Pydantic tuple
+  alias. Its before-validator changes only the exactly empty string `""` to an
+  empty list before tuple validation. It preserves fail-fast item validation.
+  Use this type for future fields that intentionally accept blank-as-empty
+  collection values; do not add parser field-name checks or global coercion.
+- `Module.mods` defaults to an empty tuple. Fields using `EmptyableList` also
+  accept an explicitly blank value, including a quoted empty string. Whitespace-
+  only strings, `None`, and other wrong types remain invalid. Flow `[]` is not
+  supported by the reader.
+- For future writers, omit empty optional list fields rather than emitting `[]`.
+  Omitted `mods` also means empty. Alias `resolution` must remain nonempty; this
+  module-reader change does not alter alias validation.
+- Convert StrictYAML parser errors to `ModuleParseError`, retaining source marks
+  where available. StrictYAML 1.7.3 may wrap an invalid-character `ReaderError`
+  in `AttributeError`; translate that case only when the chained context is a
+  `ReaderError`, and let unrelated `AttributeError`s surface. Keep Pydantic
+  validation details sanitized and do not invent source coordinates. Filesystem
+  errors remain filesystem errors.
 
-### Empty lists
+## YAML editing (planned)
 
-StrictYAML rejects flow-style empty lists (`[]`). When an optional list becomes
-empty, remove its mapping key instead of emitting `[]` or a blank value. The
-reader should interpret an omitted optional list as empty.
+Use ruamel.yaml for comment-aware editing only if/when editing is implemented.
+StrictYAML remains the reader/validator and source of semantic values. Do not
+trust ruamel's implicitly typed values for lexical identifiers such as Workshop
+IDs. Revalidate serialized output with StrictYAML and compare decoded domain
+values with the intended result before saving.
 
-- For `before` and `after`, omit the field when its last reference is removed.
-  Omission already means no ordering constraints.
-- Do not apply this rule blindly to required lists. `mods` is currently required;
-  omitting it would require an explicit decision that missing `mods` means an
-  empty module, followed by corresponding reader/schema changes.
-- Alias `resolution` must remain nonempty. Removing its field does not make an
-  empty resolution valid; reject the edit rather than silently remove the alias.
-
-### Validation and preservation
-
-Use StrictYAML-decoded values as the semantic source of truth: ruamel.yaml can
-implicitly type values and lose meaningful identifier spelling when those Python
-values are used directly (for example, leading zeros in Workshop IDs).
-
-Before saving, validate serialized output with StrictYAML and compare its
-schema-normalized domain values with the intended result. Default ruamel.yaml
-serialization is not guaranteed to produce StrictYAML-compatible output.
-
-Comment and formatting preservation need separate tests, especially for list
-insertion, removal, and reordering. Semantic validation cannot detect lost or
-misattached comments; removing an empty field must not silently discard unrelated
-comments.
+Default ruamel serialization is not guaranteed to use StrictYAML-compatible
+syntax. Comment and formatting preservation need separate tests, especially for
+list insertion, removal, and reordering. Semantic validation cannot detect lost
+or misattached comments; removing an empty field must not silently discard
+unrelated comments. No editing functionality is implemented by this note.

@@ -3,7 +3,7 @@
 from dataclasses import InitVar, field
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, TypeAlias, get_args, get_type_hints
+from typing import Annotated, Any, TypeAlias
 
 import pytest
 from pydantic import (
@@ -22,13 +22,12 @@ from pydantic import (
 from pydantic.dataclasses import dataclass as validated_dataclass
 from pydantic_core import CoreSchema, core_schema
 
-from rimpack.sdk._validation import SelectByRequiredField
+from rimpack.sdk._validation import EmptyableList, SelectByRequiredField
 from rimpack.sdk.module import (
     AlsModRecord,
     AlsModReferenced,
     LocModRecord,
     LocModReferenced,
-    ModRecord,
     ModRecords,
     Module,
     ModuleParseError,
@@ -104,56 +103,67 @@ def _parse_failure(tmp_path: Path, source: str) -> ModuleParseError:
     return captured.value
 
 
-def _tagged_union_in(schema: object) -> dict[str, Any] | None:
-    """Find the first tagged-union CoreSchema node nested in a schema tree."""
-    if isinstance(schema, dict):
-        if schema.get("type") == "tagged-union":
-            return schema
-        for value in schema.values():
-            found = _tagged_union_in(value)
-            if found is not None:
-                return found
-    elif isinstance(schema, list):
-        for value in schema:
-            found = _tagged_union_in(value)
-            if found is not None:
-                return found
-    return None
+def test_emptyable_list_applies_to_future_collection_fields() -> None:
+    """Reuse the opt-in collection type on a new field without parser changes."""
+
+    @validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+    class FutureSettings:
+        """Model an unrelated future setting with an optional emptyable list."""
+
+        arbitrary_rows: EmptyableList[StrictStr]
+
+    empty = FutureSettings(arbitrary_rows="")
+    assert empty.arbitrary_rows == ()
+    assert FutureSettings(arbitrary_rows=[]).arbitrary_rows == ()
+    assert FutureSettings(arbitrary_rows=("tuple",)).arbitrary_rows == ("tuple",)
+
+    rows = ["one", "", "one"]
+    parsed = FutureSettings(arbitrary_rows=rows)
+    assert parsed.arbitrary_rows == ("one", "", "one")
+    assert rows == ["one", "", "one"]
+
+    for invalid in (None, False, 0, {}, " ", "null", "[]", "items"):
+        with pytest.raises(ValidationError):
+            FutureSettings(arbitrary_rows=invalid)
+
+    with pytest.raises(ValidationError) as error:
+        FutureSettings(arbitrary_rows=["valid", 12, "not validated after fail-fast"])
+    assert [tuple(item["loc"]) for item in error.value.errors()] == [
+        ("arbitrary_rows", 1)
+    ]
 
 
-def test_production_collections_keep_static_union_types_and_selected_schemas() -> None:
-    """Expose ordinary typed unions while applying the selector only in collections."""
-    assert get_args(ModRecord) == (
+def test_production_collections_dispatch_all_record_variants() -> None:
+    """Dispatch each full and reference-only mapping to its concrete record."""
+    mod_records = TypeAdapter(ModRecords).validate_python(
+        [
+            {"pid": "package.mod"},
+            {"wid": "123"},
+            {"loc": "mods/local"},
+            {"als": "module_alias"},
+        ]
+    )
+    reference_records = TypeAdapter(ReferencedModRecords).validate_python(
+        [
+            {"pid": "package.mod"},
+            {"wid": "123"},
+            {"loc": "mods/local"},
+            {"als": "module_alias"},
+        ]
+    )
+
+    assert [type(record) for record in mod_records] == [
         PidModRecord,
         WidModRecord,
         LocModRecord,
         AlsModRecord,
-    )
-    assert get_args(ReferencedModRecord) == (
+    ]
+    assert [type(record) for record in reference_records] == [
         PidModReferenced,
         WidModReferenced,
         LocModReferenced,
         AlsModReferenced,
-    )
-
-    module_fields = get_type_hints(Module, include_extras=True)
-    mods_annotation = module_fields["mods"]
-    tuple_annotation = get_args(mods_annotation)[0]
-    element_annotation = get_args(tuple_annotation)[0]
-    assert get_args(element_annotation)[0] == ModRecord
-    assert isinstance(get_args(element_annotation)[1], SelectByRequiredField)
-
-    for adapter in (TypeAdapter(ModRecords), TypeAdapter(ReferencedModRecords)):
-        selected = _tagged_union_in(adapter.core_schema)
-        assert selected is not None
-        assert tuple(selected["choices"]) == ("pid", "wid", "loc", "als")
-
-    # The aliases remain ordinary unions when used directly; the contract is
-    # the annotated tuple element consumed by Module and ordering constraints.
-    raw_record_schema = TypeAdapter(ModRecord).core_schema
-    assert raw_record_schema["type"] == "definitions"
-    assert raw_record_schema["schema"]["type"] == "union"
-    assert TypeAdapter(ReferencedModRecord).core_schema["type"] == "union"
+    ]
 
 
 def test_all_variants_and_nested_constraints_preserve_order_and_values(
@@ -225,19 +235,16 @@ def test_python_json_roundtrips_keep_concrete_variants_and_values(
     ]
 
 
-def test_falsey_identity_values_reach_the_selected_variant_validator(
+def test_string_scalars_reach_the_selected_variant_validator(
     tmp_path: Path,
 ) -> None:
-    """Select on key presence so invalid falsey values get domain-specific errors."""
+    """Treat scalar-looking YAML words as text before domain validation."""
     cases = (
-        ("pid", "null", "string_type"),
-        ("pid", '\"\"', "value_error"),
+        ("pid", '""', "value_error"),
         ("wid", "0", "value_error"),
         ("wid", "false", "value_error"),
-        ("loc", '\"\"', "value_error"),
-        ("loc", "false", "path_type"),
-        ("als", '\"\"', "value_error"),
-        ("als", "false", "string_type"),
+        ("loc", '""', "value_error"),
+        ("als", '""', "value_error"),
     )
     for key, value, expected_type in cases:
         error = _parse_failure(
@@ -251,27 +258,62 @@ def test_falsey_identity_values_reach_the_selected_variant_validator(
         assert details[0]["type"] == expected_type
 
 
+def test_boolean_null_numeric_and_date_like_scalars_are_text(
+    tmp_path: Path,
+) -> None:
+    """Preserve implicit-type-looking values as strings in domain records."""
+    module = parse_module_yaml(
+        _write_yaml(
+            tmp_path,
+            """name: lexical
+mods:
+  - pid: true
+  - pid: false
+  - pid: null
+  - pid: 123
+  - pid: 2025-99-99
+  - loc: false
+  - als: null
+""",
+        )
+    )
+    assert [record.pid for record in module.mods[:5]] == [
+        "true",
+        "false",
+        "null",
+        "123",
+        "2025-99-99",
+    ]
+    assert isinstance(module.mods[5], LocModRecord)
+    assert module.mods[5].loc.as_posix() == "false"
+    assert isinstance(module.mods[6], AlsModRecord)
+    assert module.mods[6].als == "null"
+
+
 def test_missing_ambiguous_and_unknown_variant_keys_are_item_errors(
     tmp_path: Path,
 ) -> None:
     """Reject zero or multiple matching identities at the affected tuple item."""
     cases = (
-        ("name: demo\nmods: [{}]\n", ("mods", 0)),
         (
-            "name: demo\nmods: [{pid: one.mod, wid: 10}]\n",
+            "name: demo\nmods:\n  - before:\n      - pid: nested.mod\n",
             ("mods", 0),
         ),
         (
-            "name: demo\nmods: [{unknown: hidden}]\n",
+            "name: demo\nmods:\n  - pid: one.mod\n    wid: 10\n",
             ("mods", 0),
         ),
         (
-            "name: demo\nmods: [{PidModRecord: hidden}]\n",
+            "name: demo\nmods:\n  - unknown: hidden\n",
             ("mods", 0),
         ),
         (
-            "name: demo\nmods: [{pid: parent.mod, before: "
-            "[{pid: one.mod, wid: 10}]}]\n",
+            "name: demo\nmods:\n  - PidModRecord: hidden\n",
+            ("mods", 0),
+        ),
+        (
+            "name: demo\nmods:\n  - pid: parent.mod\n    before:\n"
+            "      - pid: one.mod\n        wid: 10\n",
             ("mods", 0, "pid", "before", 0),
         ),
     )
@@ -322,7 +364,12 @@ mods:
 
     unknown = _parse_failure(
         tmp_path,
-        f"name: demo\nmods:\n  - pid: parent.mod\n    before: [{secret}]\n",
+        f"""name: demo
+mods:
+  - pid: parent.mod
+    before:
+      - hidden: {secret}
+""",
     )
     assert secret not in unknown.message
     assert "errors.pydantic.dev" not in unknown.message
@@ -332,12 +379,14 @@ def test_tuple_failfast_stops_after_the_first_invalid_item(tmp_path: Path) -> No
     """Retain FailFast on module and nested reference tuple collections."""
     error = _parse_failure(
         tmp_path,
-        'name: okay\nmods: [{pid: ""}, {wid: 0}]\n',
+        """name: okay
+mods:
+  - pid: ""
+  - wid: 0
+""",
     )
     details = _error_details(error)
-    assert [tuple(detail["loc"]) for detail in details] == [
-        ("mods", 0, "pid", "pid")
-    ]
+    assert [tuple(detail["loc"]) for detail in details] == [("mods", 0, "pid", "pid")]
 
 
 def test_schema_evolution_needs_no_selector_metadata_updates() -> None:
@@ -354,9 +403,7 @@ def test_schema_evolution_needs_no_selector_metadata_updates() -> None:
     RenamedReference: TypeAlias = Annotated[
         RenamedPackage | RenamedWorkshop, SelectByRequiredField()
     ]
-    renamed = TypeAdapter(RenamedReference).validate_python(
-        {"package": "some.mod"}
-    )
+    renamed = TypeAdapter(RenamedReference).validate_python({"package": "some.mod"})
     assert isinstance(renamed, RenamedPackage)
 
     @validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -426,9 +473,7 @@ def test_shared_required_and_keyword_only_identity_fields_are_supported() -> Non
     )
     with pytest.raises(ValidationError) as error:
         adapter.validate_python({"alpha": "missing-shared"})
-    assert any(
-        tuple(detail["loc"])[-1] == "shared" for detail in error.value.errors()
-    )
+    assert any(tuple(detail["loc"])[-1] == "shared" for detail in error.value.errors())
 
     @validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
     class KeywordOnlyAlpha:
@@ -575,9 +620,7 @@ def test_alias_paths_and_choices_fail_during_schema_construction() -> None:
     class PathDelta:
         delta: str
 
-    PathUnion: TypeAlias = Annotated[
-        PathGamma | PathDelta, SelectByRequiredField()
-    ]
+    PathUnion: TypeAlias = Annotated[PathGamma | PathDelta, SelectByRequiredField()]
     with pytest.raises(TypeError, match="only simple string aliases"):
         TypeAdapter(PathUnion)
 
@@ -628,11 +671,7 @@ def test_resolved_forward_references_use_pydantic_schema() -> None:
     class PlainBeta:
         beta: str
 
-    parsed_enum = TypeAdapter(EnumAlpha).validate_python({"alpha": "ready"})
-    assert parsed_enum.alpha is Status.READY
-    ForwardUnion: TypeAlias = Annotated[
-        EnumAlpha | PlainBeta, SelectByRequiredField()
-    ]
+    ForwardUnion: TypeAlias = Annotated[EnumAlpha | PlainBeta, SelectByRequiredField()]
     selected = TypeAdapter(ForwardUnion).validate_python({"alpha": "ready"})
     assert isinstance(selected, EnumAlpha)
     assert selected.alpha is Status.READY
@@ -655,9 +694,7 @@ def test_after_and_field_validators_remain_in_the_original_branch_schema() -> No
     class PlainBeta:
         beta: str
 
-    AfterUnion: TypeAlias = Annotated[
-        AfterAlpha | PlainBeta, SelectByRequiredField()
-    ]
+    AfterUnion: TypeAlias = Annotated[AfterAlpha | PlainBeta, SelectByRequiredField()]
     after = TypeAdapter(AfterUnion).validate_python({"alpha": "value"})
     assert isinstance(after, AfterAlpha)
     assert after.checked
@@ -701,12 +738,7 @@ def test_input_transforming_model_validators_are_rejected_at_build_time() -> Non
     class PlainBeta:
         beta: str
 
-    assert TypeAdapter(BeforeModel).validate_python(
-        {"legacy_alpha": "a"}
-    ).alpha == "a"
-    BeforeUnion: TypeAlias = Annotated[
-        BeforeModel | PlainBeta, SelectByRequiredField()
-    ]
+    BeforeUnion: TypeAlias = Annotated[BeforeModel | PlainBeta, SelectByRequiredField()]
     with pytest.raises(TypeError, match="model-level function-before"):
         TypeAdapter(BeforeUnion)
 
@@ -795,9 +827,7 @@ def test_init_only_explicit_non_init_and_ambiguous_schemas_fail_closed() -> None
     class OtherInput:
         other: str
 
-    NotInputUnion: TypeAlias = Annotated[
-        NotInput | OtherInput, SelectByRequiredField()
-    ]
+    NotInputUnion: TypeAlias = Annotated[NotInput | OtherInput, SelectByRequiredField()]
     with pytest.raises(TypeError, match="init=False fields are unsupported"):
         TypeAdapter(NotInputUnion)
 
@@ -805,9 +835,7 @@ def test_init_only_explicit_non_init_and_ambiguous_schemas_fail_closed() -> None
 def test_pep695_alias_and_ambiguous_multiple_inheritance_fail_clearly() -> None:
     """Reject hidden type-alias unions and ambiguous concrete instances."""
     type PEP695Reference = PidModReferenced | WidModReferenced
-    hidden_alias: TypeAlias = Annotated[
-        PEP695Reference, SelectByRequiredField()
-    ]
+    hidden_alias: TypeAlias = Annotated[PEP695Reference, SelectByRequiredField()]
     with pytest.raises(TypeError, match="direct, statically visible unions"):
         TypeAdapter(hidden_alias)
 
@@ -841,9 +869,10 @@ def test_per_call_alias_name_overrides_are_outside_the_contract() -> None:
     class Beta:
         beta: str
 
-    assert TypeAdapter(Alpha).validate_python(
-        {"alpha": "value"}, by_name=True
-    ).alpha == "value"
+    assert (
+        TypeAdapter(Alpha).validate_python({"alpha": "value"}, by_name=True).alpha
+        == "value"
+    )
     Union: TypeAlias = Annotated[Alpha | Beta, SelectByRequiredField()]
     with pytest.raises(ValidationError) as error:
         TypeAdapter(Union).validate_python({"alpha": "value"}, by_name=True)

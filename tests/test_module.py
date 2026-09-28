@@ -179,20 +179,50 @@ mods:
 
 
 def test_empty_mod_and_constraint_lists_are_valid(tmp_path: Path) -> None:
-    """Accept empty collections while defaulting omitted constraints to tuples."""
+    """Accept omitted and blank collections as immutable empty tuples."""
     module = parse_yaml(
         tmp_path,
         """name: empty
 mods:
   - pid: empty.constraints
-    before: []
-    after: []
+    before:
+    after:
 """,
     )
-    assert parse_yaml(tmp_path, "name: no_mods\nmods: []\n").mods == ()
+    assert parse_yaml(tmp_path, "name: no_mods\n").mods == ()
     assert isinstance(module.mods[0], PidModRecord)
     assert module.mods[0].before == ()
     assert module.mods[0].after == ()
+
+
+@pytest.mark.parametrize("empty_value", ["", "''", '""'])
+@pytest.mark.parametrize("field", ["mods", "before", "after"])
+def test_blank_collection_values_become_empty_tuples(
+    tmp_path: Path, field: str, empty_value: str
+) -> None:
+    """Normalize only empty scalar spellings at each emptyable list field."""
+    if field == "mods":
+        source = f"name: blank_{field}\nmods: {empty_value} # intentionally empty\n"
+        assert parse_yaml(tmp_path, source).mods == ()
+    else:
+        source = (
+            f"name: blank_{field}\nmods:\n  - pid: parent.mod\n"
+            f"    {field}: {empty_value} # intentionally empty\n"
+        )
+        record = parse_yaml(tmp_path, source).mods[0]
+        assert getattr(record, field) == ()
+
+
+def test_module_collections_default_and_normalize_only_empty_strings() -> None:
+    """Apply the reusable emptyable-list contract to direct Module construction."""
+    assert Module(name="implicit_empty").mods == ()
+    assert Module(name="explicit_empty", mods="").mods == ()  # type: ignore[arg-type]
+    record = PidModRecord(pid="blank_constraints", before="")  # type: ignore[arg-type]
+    assert record.before == ()
+    with pytest.raises(ValidationError):
+        Module(name="not_none", mods=None)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        PidModRecord(pid="not_none", before=None)  # type: ignore[arg-type]
 
 
 def test_reference_values_preserve_source_and_canonicalize_pid_identity() -> None:
@@ -252,15 +282,17 @@ def test_records_are_frozen() -> None:
 def test_accepts_positive_workshop_ids_and_preserves_digit_spelling(
     tmp_path: Path, yaml_value: str, expected: str
 ) -> None:
-    """Convert decimal integers to text and retain leading-zero digit strings."""
+    """Treat bare and quoted decimal scalars as text, preserving leading zeros."""
     module = parse_yaml(tmp_path, f"name: workshop\nmods:\n  - wid: {yaml_value}\n")
     assert module.mods == (WidModRecord(wid=expected),)
 
 
-def test_rejects_explicit_nondecimal_integer_tags(tmp_path: Path) -> None:
-    """Prevent explicit YAML tags from reintroducing legacy octal IDs."""
-    with pytest.raises(ModuleParseError, match="decimal integer syntax"):
+def test_rejects_explicit_yaml_tags(tmp_path: Path) -> None:
+    """Reject explicit scalar tags as unsupported StrictYAML syntax."""
+    with pytest.raises(ModuleParseError, match="tag") as error:
         parse_yaml(tmp_path, "name: workshop\nmods:\n  - wid: !!int 00123\n")
+    assert error.value.line == 3
+    assert error.value.column is not None
 
 
 @pytest.mark.parametrize("quoted", [False, True])
@@ -272,27 +304,26 @@ def test_rejects_oversized_workshop_ids_as_module_parse_errors(
     yaml_value = f'"{digits}"' if quoted else digits
     with pytest.raises(ModuleParseError) as error:
         parse_yaml(tmp_path, f"name: workshop\nmods:\n  - wid: {yaml_value}\n")
-    if quoted:
-        assert error.value.location == "$"
-        details = validation_details(error.value)
-        assert len(details) == 1
-        assert details[0]["loc"] == ("mods", 0, "wid", "wid")
-        assert details[0]["type"] == "value_error"
-        assert "must not exceed" in details[0]["msg"]
-    else:
-        assert error.value.line == 3
-        assert error.value.column is not None
+    assert error.value.location == "$"
+    assert error.value.line is None
+    assert error.value.column is None
+    details = validation_details(error.value)
+    assert len(details) == 1
+    assert details[0]["loc"] == ("mods", 0, "wid", "wid")
+    assert details[0]["type"] == "value_error"
+    assert "must not exceed" in details[0]["msg"]
 
 
-def test_yaml_boolean_words_are_strings_unless_true_or_false(
-    tmp_path: Path,
-) -> None:
-    """Keep YAML 1.1 boolean words as valid identifier and path strings."""
+def test_yaml_scalar_words_remain_strings(tmp_path: Path) -> None:
+    """Keep boolean-, null-, and YAML 1.1-looking words as domain strings."""
     module = parse_yaml(
         tmp_path,
         """name: on
 mods:
   - pid: yes
+  - pid: true
+  - pid: false
+  - pid: null
   - als: no
   - loc: off
 """,
@@ -300,6 +331,9 @@ mods:
     assert module.name == "on"
     assert module.mods == (
         PidModRecord(pid="yes"),
+        PidModRecord(pid="true"),
+        PidModRecord(pid="false"),
+        PidModRecord(pid="null"),
         AlsModRecord(als="no"),
         LocModRecord(loc=Path("off")),
     )
@@ -312,6 +346,8 @@ mods:
         '"000"',
         "-1",
         "1.5",
+        "+123",
+        "1_000",
         '"1x"',
         "true",
         "18446744073709551616",
@@ -324,9 +360,9 @@ def test_rejects_invalid_workshop_ids(tmp_path: Path, value: str) -> None:
         parse_yaml(tmp_path, f"name: workshop\nmods:\n  - wid: {value}\n")
 
 
-@pytest.mark.parametrize("value", ["", '"   "', '"mods/\\0bad"', "123"])
+@pytest.mark.parametrize("value", ["", '"   "', '"mods/\\0bad"'])
 def test_rejects_invalid_local_path_values(tmp_path: Path, value: str) -> None:
-    """Reject blank, NUL-containing, and non-string local path values."""
+    """Reject blank and NUL-containing local path strings."""
     with pytest.raises(ModuleParseError):
         parse_yaml(tmp_path, f"name: local\nmods:\n  - loc: {value}\n")
 
@@ -352,17 +388,39 @@ mods:
     )
     assert isinstance(spaced.mods[0], LocModRecord)
     assert spaced.mods[0].loc == Path("mods/my mod")
+    numeric = parse_yaml(tmp_path, "name: numeric_path\nmods:\n  - loc: 123\n")
+    assert numeric.mods[0].loc == Path("123")
+
+
+def test_comments_multiline_paths_and_windows_backslashes_are_plain_text(
+    tmp_path: Path,
+) -> None:
+    """Ignore comments while retaining multiline and Windows path text."""
+    module = parse_yaml(
+        tmp_path,
+        r"""# module comment
+name: paths
+mods:
+  # first mod comment
+  - pid: first.mod # inline note
+  - loc: >-
+      D:\RimWorld\Mods\Local
+      Folder
+""",
+    )
+    assert module.mods[0] == PidModRecord(pid="first.mod")
+    assert isinstance(module.mods[1], LocModRecord)
+    assert str(module.mods[1].loc) == r"D:\RimWorld\Mods\Local Folder"
 
 
 @pytest.mark.parametrize(
     ("yaml_text", "detail_location", "detail_type"),
     [
-        ("mods: []\n", ("name",), "missing"),
-        ("name: demo\n", ("mods",), "missing"),
-        ("name: invalid-name\nmods: []\n", ("name",), "value_error"),
-        ("name: demo\nmods: {}\n", ("mods",), "tuple_type"),
+        ("mods:\n", ("name",), "missing"),
+        ("name: invalid-name\nmods:\n", ("name",), "value_error"),
+        ("name: demo\nmods: not_a_list\n", ("mods",), "tuple_type"),
         (
-            "name: demo\nmods:\n  - before: []\n",
+            "name: demo\nmods:\n  - before:\n",
             ("mods", 0),
             "variant_key_error",
         ),
@@ -393,11 +451,16 @@ def test_rejects_incomplete_or_invalid_module_shapes(
 def test_reports_missing_nested_reference_at_constraint_location(
     tmp_path: Path, constraint: str
 ) -> None:
-    """Point to an empty reference mapping instead of an unrelated union branch."""
+    """Point to a malformed nested reference instead of another union branch."""
     with pytest.raises(ModuleParseError) as error:
         parse_yaml(
             tmp_path,
-            f"name: demo\nmods:\n  - pid: valid.mod\n    {constraint}: [{{}}]\n",
+            f"""name: demo
+mods:
+  - pid: valid.mod
+    {constraint}:
+      - unknown: hidden
+""",
         )
     assert error.value.location == "$"
     details = validation_details(error.value)
@@ -407,28 +470,23 @@ def test_reports_missing_nested_reference_at_constraint_location(
 
 
 @pytest.mark.parametrize(
-    ("field", "collection"),
+    "source",
     [
-        (field, collection)
-        for field in ("mods", "before", "after")
-        for collection in ("!!set {}", "!!omap []", "!!pairs []")
+        "name: flow_sequence\nmods: []\n",
+        "name: flow_mapping\nmods:\n  - {pid: a.mod}\n",
+        "name: anchored\nmods:\n  - &entry\n    pid: a.mod\n",
+        "name: aliased\nmods:\n  - *entry\n",
     ],
 )
-def test_rejects_nonsequence_tagged_collections(
-    tmp_path: Path, field: str, collection: str
-) -> None:
-    """Reject tagged collection types that are not module YAML lists."""
-    if field == "mods":
-        source = f"name: tagged\nmods: {collection}\n"
-    else:
-        source = f"name: tagged\nmods:\n  - pid: root.mod\n    {field}: {collection}\n"
+def test_rejects_flow_tags_anchors_and_aliases(tmp_path: Path, source: str) -> None:
+    """Reject YAML features outside the StrictYAML module-file subset."""
     with pytest.raises(ModuleParseError) as error:
         parse_yaml(tmp_path, source)
     assert error.value.line is not None
-    assert "collection tag" in error.value.message
+    assert error.value.column is not None
 
 
-@pytest.mark.parametrize("value", ["null", "{}", '"not-a-list"'])
+@pytest.mark.parametrize("value", ["null", "'{}'", '"not-a-list"'])
 def test_rejects_non_list_constraint_values(tmp_path: Path, value: str) -> None:
     """Reject nulls, mappings, and scalars where constraint sequences are expected."""
     with pytest.raises(ModuleParseError):
@@ -441,11 +499,11 @@ def test_rejects_non_list_constraint_values(tmp_path: Path, value: str) -> None:
 def test_rejects_unknown_fields_and_nested_constraint_fields(tmp_path: Path) -> None:
     """Reject unsupported root, entry, and reference-only mapping fields."""
     invalid_modules = (
-        "name: demo\nmods: []\nextra: true\n",
+        "name: demo\nmods:\nextra: true\n",
         "name: demo\nmods:\n  - pid: a.mod\n    extra: true\n",
         (
             "name: demo\nmods:\n  - pid: a.mod\n    before:\n"
-            "      - pid: b.mod\n        after: []\n"
+            "      - pid: b.mod\n        after:\n          - pid: c.mod\n"
         ),
     )
     for source in invalid_modules:
@@ -460,7 +518,8 @@ mods:
   - pid: valid.mod
     before:
       - pid: other.mod
-        after: []
+        after:
+          - pid: nested.mod
 """,
         )
     assert error.value.location == "$"
@@ -502,7 +561,7 @@ mods:
 @pytest.mark.parametrize(
     "source",
     [
-        "name: demo\nname: duplicate\nmods: []\n",
+        "name: demo\nname: duplicate\nmods:\n",
         "name: demo\nmods:\n  - pid: a.mod\n    pid: b.mod\n",
         (
             "name: demo\nmods:\n  - pid: a.mod\n    before:\n"
@@ -513,7 +572,7 @@ mods:
 def test_duplicate_yaml_keys_are_rejected_with_source_marks(
     tmp_path: Path, source: str
 ) -> None:
-    """Reject duplicate keys before YAML mapping construction can overwrite them."""
+    """Reject duplicate keys before StrictYAML can overwrite them."""
     with pytest.raises(ModuleParseError) as error:
         parse_yaml(tmp_path, source)
     assert error.value.line is not None
@@ -521,84 +580,75 @@ def test_duplicate_yaml_keys_are_rejected_with_source_marks(
     assert "duplicate key" in str(error.value).lower()
 
 
-def test_rejects_multiple_documents_custom_tags_and_merge_keys(tmp_path: Path) -> None:
-    """Use one safe YAML document and disallow custom-tag or merge semantics."""
-    invalid_sources = (
-        "name: one\nmods: []\n---\nname: two\nmods: []\n",
-        "!Custom {name: demo, mods: []}\n",
-        "defaults: &defaults {name: demo, mods: []}\n<<: *defaults\n",
-    )
-    for source in invalid_sources:
-        with pytest.raises(ModuleParseError):
-            parse_yaml(tmp_path, source)
-
-
-def test_accepts_repeated_acyclic_aliases(tmp_path: Path) -> None:
-    """Allow harmless YAML aliases and parse repeated mappings independently."""
-    module = parse_yaml(
-        tmp_path,
-        """name: repeated
-mods:
-  - &entry
-    pid: same.mod
-  - *entry
-""",
-    )
-    assert module.mods == (PidModRecord("same.mod"), PidModRecord("same.mod"))
-    assert module.mods[0] is not module.mods[1]
-
-
-def test_rejects_recursive_yaml_aliases(tmp_path: Path) -> None:
-    """Turn recursive container aliases into a controlled parse error."""
-    with pytest.raises(ModuleParseError, match="recursive YAML aliases"):
-        parse_yaml(
-            tmp_path,
-            """name: recursive
-mods: &mods
-  - pid: cycle.mod
-    before: *mods
-""",
-        )
+def test_rejects_multiple_documents(tmp_path: Path) -> None:
+    """Reject YAML streams containing more than one module document."""
+    source = "name: one\nmods:\n---\nname: two\nmods:\n"
+    with pytest.raises(ModuleParseError):
+        parse_yaml(tmp_path, source)
 
 
 def test_accepts_utf8_bom_and_reports_decode_errors(tmp_path: Path) -> None:
     """Accept an optional UTF-8 BOM and translate invalid bytes into parser errors."""
-    path = write_module(tmp_path, "name: bom\nmods: []\n")
-    path.write_bytes(b"\xef\xbb\xbfname: bom\nmods: []\n")
+    path = write_module(tmp_path, "name: bom\nmods:\n")
+    path.write_bytes(b"\xef\xbb\xbfname: bom\nmods:\n")
     assert parse_module_yaml(path).name == "bom"
 
-    path.write_bytes(b"name: \xff\nmods: []\n")
+    path.write_bytes(b"name: \xff\nmods:\n")
     with pytest.raises(ModuleParseError, match="UTF-8"):
         parse_module_yaml(path)
 
 
 def test_yaml_syntax_errors_include_source_line_and_column(tmp_path: Path) -> None:
-    """Expose one-based source positions for syntax errors reported by PyYAML."""
+    """Expose one-based source positions for syntax errors reported by StrictYAML."""
     with pytest.raises(ModuleParseError) as error:
         parse_yaml(tmp_path, "name: demo\nmods: [\n")
     assert error.value.line is not None
     assert error.value.column is not None
 
 
-@pytest.mark.parametrize(
-    "timestamp", ["2025-99-99", "!!timestamp 2025-99-99"]
-)
-def test_invalid_yaml_timestamps_are_marked_module_parse_errors(
-    tmp_path: Path, timestamp: str
+@pytest.mark.parametrize("character", ["\x00", "\x01", "\x1f"])
+def test_invalid_yaml_control_characters_are_parse_errors(
+    tmp_path: Path, character: str
 ) -> None:
-    """Translate implicit and explicit timestamp-construction failures at source."""
-    path = write_module(
-        tmp_path, f"name: demo\nmods:\n  - pid: {timestamp}\n"
-    )
+    """Convert StrictYAML reader failures for literal control characters."""
+    path = write_module(tmp_path, f"name: demo\nmods:\n  - pid: a{character}b\n")
     with pytest.raises(ModuleParseError) as error:
         parse_module_yaml(path)
-
     assert error.value.path == path
     assert error.value.location == "$"
-    assert error.value.line == 3
-    assert error.value.column is not None
-    assert error.value.message.startswith("invalid YAML timestamp:")
-    assert "month" in error.value.message
+    assert error.value.message.startswith("unacceptable character")
+
+
+def test_empty_and_comment_only_documents_are_rejected(tmp_path: Path) -> None:
+    """Reject documents with no YAML content using a stable parser error."""
+    for source in (
+        "",
+        "  " + "\n" + "\t" + "\n",
+        "# only a comment" + "\n\n  # still empty\n",
+    ):
+        with pytest.raises(ModuleParseError, match="document must not be empty"):
+            parse_yaml(tmp_path, source)
+
+
+def test_nonmapping_yaml_root_is_rejected(tmp_path: Path) -> None:
+    """Require one mapping at the document root before domain validation."""
+    with pytest.raises(ModuleParseError, match="expected a YAML mapping"):
+        parse_yaml(tmp_path, "plain scalar root\n")
+
+
+def test_deeply_nested_unknown_values_fail_with_a_controlled_error(
+    tmp_path: Path,
+) -> None:
+    """Bound deeply nested input and ensure failures remain parser errors."""
+    depth = 256
+    lines = ["name: deep", "mods:", "extra:"]
+    lines.extend(" " * (2 * (level + 1)) + "nested:" for level in range(depth))
+    lines.append(" " * (2 * (depth + 1)) + "value")
+
+    with pytest.raises(ModuleParseError) as error:
+        parse_yaml(tmp_path, "\n".join(lines) + "\n")
+    assert error.value.path == tmp_path / "modules" / "example.yml"
+    assert error.value.location == "$"
 
 
 def test_filesystem_errors_remain_os_errors(tmp_path: Path) -> None:

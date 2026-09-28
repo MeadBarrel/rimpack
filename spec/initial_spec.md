@@ -47,7 +47,8 @@ mods:
 
 ## Module format
 
-A module contains a name and an ordered list of mods.
+A module contains a name and an optionally specified ordered list of mods. If
+omitted, the module has no mods.
 
 ### `name`
 
@@ -56,7 +57,10 @@ The module name. It must match the ASCII identifier pattern
 
 ### `mods`
 
-A required ordered list of mods contained in the module. The list may be empty.
+An optional ordered list of mods contained in the module. If omitted, it is treated
+as empty. An explicitly empty list may be written with a blank scalar (`mods:` or
+`mods: ""`); a whitespace-only value is not empty. Flow-style empty lists (`[]`)
+are not supported.
 
 Each mod is represented by a mapping with exactly one reference field (`pid`, `wid`,
 `loc`, or `als`), and may also contain `before` and/or `after`. No other fields are
@@ -71,21 +75,16 @@ contain additional fields.
 
 ### `wid`
 
-Steam Workshop published-file ID. It is a positive unsigned 64-bit integer, from
-`1` through `18446744073709551615`. It may be written as a positive decimal YAML
-integer or an ASCII decimal digit string whose numeric value is within that range.
-Booleans, floats, zero, negative values, and other strings are invalid. The parser
-stores the value as text; digit strings retain leading zeros whether quoted or
-unquoted. The loader does not interpret leading-zero numbers as octal.
+Steam Workshop published-file ID. It must contain only ASCII decimal digits and
+have a numeric value from `1` through `18446744073709551615`. Leading zeros are
+preserved, and do not change the numeric range check. Signs, digit separators,
+zero, and values above the maximum are invalid.
 
-Tagged scalar syntax, such as `!!int`, is outside the supported module-file contract;
-users should use the untagged scalar forms shown here. The implementation may recognize
-some explicit tags for compatibility, but malformed or otherwise tagged scalars are not
-required to produce `ModuleParseError`.
-
-For predictable identifiers, the loader treats only `true`/`false` spellings as
-booleans; `yes`, `no`, `on`, and `off` are strings. Quote `true` or `false` when
-using those words as string identifiers.
+Untagged scalar values in module files are text, not implicitly typed numbers,
+booleans, nulls, or dates. Thus a bare `wid: 2009463077` and quoted
+`wid: "2009463077"` both provide the same decimal text. Other values such as
+`true` are rejected for `wid` because they are not decimal digits. Explicit YAML
+tags are not supported.
 
 ```yaml
 wid: 2009463077
@@ -137,8 +136,9 @@ Mod entries may contain additional fields in addition to their reference.
 ### `before`
 
 An optional list of reference-only mappings. It adds a sorting constraint requiring
-this mod to load before the referenced mods. If omitted, it is treated as empty; if
-present, it must be a YAML list (which may be empty, but cannot be null).
+this mod to load before the referenced mods. If omitted or specified as a blank
+scalar (`before:` or `before: ""`), it is treated as empty. Otherwise it must be a
+block-style YAML list; flow-style collections such as `[]` are not supported.
 
 ```yaml
 name: example
@@ -153,8 +153,9 @@ mods:
 ### `after`
 
 An optional list of reference-only mappings. It adds a sorting constraint requiring
-this mod to load after the referenced mods. If omitted, it is treated as empty; if
-present, it must be a YAML list (which may be empty, but cannot be null).
+this mod to load after the referenced mods. If omitted or specified as a blank
+scalar (`after:` or `after: ""`), it is treated as empty. Otherwise it must be a
+block-style YAML list; flow-style collections such as `[]` are not supported.
 
 ```yaml
 name: example
@@ -170,27 +171,25 @@ Sorting behavior, constraint resolution, and ordering semantics are described in
 
 ## Module parsing and validation
 
-A module file is one YAML document whose root is a mapping containing the required
-`name` and `mods` fields. Empty files/documents, non-mapping roots, multiple documents,
-duplicate mapping keys, unknown fields, unsupported collection tags (including YAML
-sets, ordered maps, and pairs collections), YAML merge keys, and recursive YAML aliases
-are errors. Safe acyclic YAML anchors and aliases are accepted.
+A module file is one YAML document with a mapping root and a required `name` field.
+`mods` may be omitted; a missing or blank `mods`, `before`, or `after` value means
+an empty list. Empty files/documents, non-mapping roots, multiple documents, duplicate
+mapping keys, unknown fields, flow-style collections, explicit tags, anchors, and
+aliases are errors. Collections with entries use block-style YAML.
 
-Tagged scalar syntax (`!!timestamp`, `!!bool`, `!!float`, `!!int`, and similar forms)
-is outside the supported module format; users must use the ordinary untagged scalar
-forms. The parser's `ModuleParseError` guarantee applies to supported untagged values
-and structural YAML errors. Behavior for malformed or explicitly tagged scalar values
-is unspecified and may expose an underlying PyYAML exception.
+All untagged scalar values are read as text. Their validity depends on the destination
+field: for example, `pid: null` is the text `null`, while `wid: null` is invalid
+because it is not a positive decimal ID. YAML scalar spellings are not implicitly
+converted to booleans, numbers, nulls, or dates.
 
-Invalid supported values are errors; the parser does not silently discard mods or
-constraints and does not return a partially parsed module. YAML construction, syntax,
-and duplicate-key errors retain their existing source locations; syntax and duplicate-key
-errors also include a line and column when the YAML loader provides them. Pydantic validation errors
-are reported as an aggregate: `ModuleParseError.location` is `$`, and its message has
-one line per returned detail, in Pydantic order. Each line includes a tuple location,
-which may contain union-branch names, the validation message, and its error type. These
-validation errors do not fabricate YAML line or column numbers. Raw input, validator
-context, and documentation URLs are omitted from the rendered details, but this is not
-a secrecy guarantee because locations or validator messages may contain user data and
-the suppressed exception context remains inspectable. Filesystem access errors remain
-filesystem errors.
+Invalid values are errors; the parser does not silently discard mods or constraints
+and does not return a partially parsed module. Parsing and validation failures are
+reported as `ModuleParseError`; parser errors include line and column when available.
+`ModuleParseError.location` is `$` for module-level validation, and its message has
+one line per returned validation detail, in validation order. Each line includes a
+tuple location, which may contain union-branch names, the validation message, and its
+error type. Validation errors do not fabricate YAML line or column numbers. Raw input,
+validator context, and documentation URLs are omitted from rendered validation details,
+but this is not a secrecy guarantee because locations or validator messages may contain
+user data and the suppressed exception context remains inspectable. Filesystem access
+errors remain filesystem errors.

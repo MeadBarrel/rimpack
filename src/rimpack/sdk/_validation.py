@@ -1,9 +1,9 @@
-"""Schema-derived validation helpers for statically visible dataclass unions.
+"""Reusable Pydantic collection and schema-derived union validation helpers.
 
-The selector below inspects generated Pydantic CoreSchemas to infer each
-variant's required input key. It retains the original branch schemas for
-validation and serialization, and deliberately rejects shapes it cannot
-interpret safely.
+``EmptyableList`` normalizes exactly blank strings for opted-in immutable tuple
+fields. The selector inspects generated CoreSchemas to infer each union
+variant's required input key, retaining branch schemas for validation and
+serialization while rejecting shapes it cannot interpret safely.
 """
 
 from __future__ import annotations
@@ -11,10 +11,27 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import UnionType
-from typing import Any, Union, cast, get_args, get_origin
+from typing import Annotated, Any, Union, cast, get_args, get_origin
 
-from pydantic import GetCoreSchemaHandler
+from pydantic import BeforeValidator, FailFast, GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
+
+
+def _empty_string_as_empty_collection(value: object) -> object:
+    """Normalize an exactly empty string before validating a collection.
+
+    Other values, including whitespace-only strings and ``None``, pass through
+    unchanged so the collection validator can reject them normally.
+    """
+    return [] if isinstance(value, str) and value == "" else value
+
+
+# Keep FailFast on the tuple schema before the outer input normalizer is applied.
+type EmptyableList[T] = Annotated[
+    tuple[T, ...],
+    FailFast(),
+    BeforeValidator(_empty_string_as_empty_collection),
+]
 
 
 @dataclass(frozen=True)

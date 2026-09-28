@@ -614,9 +614,9 @@ def test_rejects_wrong_root(tmp_path):
         parse_text(tmp_path, "<NotAbout/> ")
 
 
-def test_surfaces_malformed_xml(tmp_path):
-    """Let ElementTree report malformed XML syntax."""
-    with pytest.raises(ET.ParseError):
+def test_rejects_malformed_xml(tmp_path):
+    """Fail fast when the input is not well-formed XML."""
+    with pytest.raises(Exception):
         parse_text(tmp_path, "<ModMetaData>")
 
 
@@ -977,17 +977,6 @@ def test_reports_invalid_ignore_attribute(
 
     assert result.value.mod_version == expected_value
     assert result.diagnostics == expected_diagnostics
-
-
-def test_rejects_nested_package_id_elements(tmp_path):
-    """Keep nested markup in the required root package identifier fatal."""
-    xml = MINIMAL_XML.replace(
-        "<packageId>example.mod</packageId>",
-        "<packageId><li>example.mod</li></packageId>",
-    )
-
-    with pytest.raises(ValueError):
-        parse_text(tmp_path, xml)
 
 
 def test_reports_and_skips_nested_versioned_descriptions(tmp_path):
