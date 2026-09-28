@@ -41,7 +41,7 @@ my_local_mod:
 
 Each top-level key is the alias name.
 
-Alias names must be valid identifiers and must not contain spaces or special characters.
+Alias names must match the ASCII identifier pattern `[A-Za-z_][A-Za-z0-9_]*`.
 
 Alias names must be unique across all alias files loaded by the modpack.
 
