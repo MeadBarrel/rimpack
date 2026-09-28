@@ -78,9 +78,13 @@ class PidReference:
 
 @dataclass(frozen=True)
 class WidReference:
-    """Internal Steam Workshop identity stored as its decimal text."""
+    """Canonical Workshop identity without source-only leading zeros."""
 
     value: str
+
+    def __post_init__(self) -> None:
+        """Strip leading zeros so equal numeric IDs compare and hash alike."""
+        object.__setattr__(self, "value", self.value.lstrip("0") or "0")
 
 
 @dataclass(frozen=True)
@@ -151,7 +155,7 @@ class _WidRecordBase:
 
     @property
     def reference(self) -> WidReference:
-        """Return an internal Workshop identity for this source ID."""
+        """Return a canonical identity while keeping the source ID unchanged."""
         return WidReference(self.wid)
 
 

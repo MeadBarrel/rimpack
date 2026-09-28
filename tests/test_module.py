@@ -98,6 +98,7 @@ mods:
     assert module.mods[0].pid == "Some.Author.Mod"
     assert module.mods[1].wid == "000123"
     assert module.mods[1].reference == WidReference("000123")
+    assert module.mods[1].reference.value == "123"
 
 
 def assert_parses_each_reference_kind_in_before_and_after(
@@ -288,6 +289,50 @@ def test_accepts_positive_workshop_ids_and_preserves_digit_spelling(
     """Treat bare and quoted decimal scalars as text, preserving leading zeros."""
     module = parse_yaml(tmp_path, f"name: workshop\nmods:\n  - wid: {yaml_value}\n")
     assert module.mods == (WidModRecord(wid=expected),)
+
+
+def test_workshop_references_match_across_leading_zero_spellings(
+    tmp_path: Path,
+) -> None:
+    """Match full entries and ordering targets by Workshop ID, not spelling."""
+    module = parse_yaml(
+        tmp_path,
+        """name: workshop_identity
+mods:
+  - wid: 000123
+  - pid: earlier.mod
+    before:
+      - wid: 123
+  - pid: later.mod
+    after:
+      - wid: "000000123"
+""",
+    )
+    workshop, earlier, later = module.mods
+    assert isinstance(workshop, WidModRecord)
+    assert isinstance(earlier, PidModRecord)
+    assert isinstance(later, PidModRecord)
+    assert workshop.wid == "000123"
+    assert earlier.before[0].wid == "123"
+    assert later.after[0].wid == "000000123"
+    identities = (
+        workshop.reference,
+        earlier.before[0].reference,
+        later.after[0].reference,
+        WidReference("123"),
+    )
+    assert all(identity.value == "123" for identity in identities)
+    assert len(set(identities)) == 1
+
+
+def test_workshop_identity_handles_heavily_zero_padded_ids(tmp_path: Path) -> None:
+    """Canonicalize valid padded IDs without converting huge strings to integers."""
+    padded = "0" * 5000 + "123"
+    module = parse_yaml(tmp_path, f"name: padded\nmods:\n  - wid: {padded}\n")
+    assert isinstance(module.mods[0], WidModRecord)
+    assert module.mods[0].wid == padded
+    assert module.mods[0].reference == WidReference("123")
+    assert module.mods[0].reference.value == "123"
 
 
 def test_rejects_explicit_yaml_tags(tmp_path: Path) -> None:

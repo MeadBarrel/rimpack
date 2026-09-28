@@ -7,7 +7,10 @@ and caveats. Clearly distinguish implemented behavior from planned work.
 ## Module YAML reading (implemented)
 
 - Internal reference constructors assume source records have already validated
-  their values; they are not input-validation boundaries.
+  their values; they are not input-validation boundaries. Workshop IDs retain
+  leading zeros in source records, but internal `WidReference` identities strip
+  them so numerically identical IDs match in ordering constraints. Normalize
+  as text to avoid integer conversion limits on heavily zero-padded valid IDs.
 - Use `EmptyableList` for future collection fields that intentionally accept a
   blank value as empty, rather than adding parser field-name checks or global
   coercion.
