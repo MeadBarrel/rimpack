@@ -18,6 +18,25 @@ and caveats. Clearly distinguish implemented behavior from planned work.
   `AttributeError`. Translate only when the chained context is a `ReaderError`;
   unrelated `AttributeError`s must surface.
 
+## Stable topological sorting (implemented)
+
+The sorter normalizes resolved `before` and `after` declarations into indexed,
+deduplicated adjacency sets. Missing references are ignored; indexed graph
+operations mean item values need stable hashing/equality but never ordering.
+For each node, urgency is the minimum original index among itself and all
+reachable descendants. A reverse-topological dynamic program computes these
+priorities in linear graph time rather than repeating reachability searches.
+
+Urgency groups encode the prefix guarantee: a node can enter an early group
+only if it is itself in that preferred prefix or is a prerequisite of an item
+in it. The implementation generates forward-priority and reverse-latest-sink
+Kahn candidates, then independently chooses the lower-inversion candidate for
+each group; ties use the lexicographically smaller original-index sequence.
+This deterministic best-of-two heuristic deliberately prioritizes prefix
+protection and does not guarantee a globally minimum inversion or movement
+metric. The indexed adjacency storage is `O(V + E)`; graph passes and candidate
+construction/scoring take `O(E + V log V)` time.
+
 ## YAML editing (planned)
 
 For future writers, omit empty optional list fields rather than emitting `[]`.

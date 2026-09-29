@@ -48,8 +48,15 @@ E
 
 This order should remain unchanged except where constraints require movement.
 
-A simple topological sort is not enough as it can override the user's preferred order
-when it's not strictly required by the constraints. Sorter must ensure minimal reordering of the user's preferred order.
+The sorter must protect each preferred prefix: when all items from an original
+prefix have been emitted, the emitted set is exactly that prefix plus its
+transitive prerequisites. A later item may enter that emitted portion only when
+it is required to unlock the prefix; unrelated later items remain behind it.
+
+Prefix protection takes priority over minimizing movement or pair reversals.
+Within the constraints imposed by protected prefixes, ordering should
+predictably prefer the user's supplied order. This policy does not promise a
+globally minimum inversion count, cut-and-paste count, or other movement metric.
 
 ## Constraint graph
 
