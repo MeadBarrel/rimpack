@@ -52,3 +52,30 @@ syntax. Comment and formatting preservation need separate tests, especially for
 list insertion, removal, and reordering. Semantic validation cannot detect lost
 or misattached comments; removing an empty field must not silently discard
 unrelated comments. No editing functionality is implemented by this note.
+
+## Steam RimWorld path discovery (implemented)
+
+- SDK Steam discovery is Windows-only and is called explicitly; importing the SDK
+  does not touch the registry or filesystem. Each call gathers registry roots,
+  conventional environment/Program Files candidates, and fixed paths on logical
+  drives, then expands only each candidate's `steamapps/libraryfolders.vdf`.
+  Candidate libraries are checked directly as well as through those metadata
+  files. No drive, game, or Workshop tree is walked.
+- The small KeyValues reader is intentionally not a general VDF implementation.
+  It is byte-, token-, and nesting-bounded; it handles quoted/bare scalars,
+  escaped quotes/backslashes, comments, and the legacy scalar plus modern nested
+  numeric library entries. It trusts only numeric library records and their
+  direct `path` fields, and only the direct `appid`/`installdir` fields under the
+  app manifest's `AppState` block. Malformed, ambiguous, unreadable, or oversized
+  metadata rejects that record/candidate without stopping other discovery.
+- A manifest install directory must be one safe Windows path component. The
+  resulting existing game directory must resolve under that library's `common`
+  directory and contain a known RimWorld executable plus a known game-data
+  directory. Workshop content is reported only when the library's exact
+  `workshop/content/294100` directory exists; an empty directory is valid.
+  Results preserve the first discovered path spelling, deduplicate with Windows
+  case-insensitive normalization, and sort by that normalized key.
+- The disposable `.probes/steam-path-discovery/` run measured a 3.29145 ms median
+  over ten warm runs on one Windows machine. This is evidence that bounded
+  metadata discovery was inexpensive on that warm filesystem cache, not a cold
+  start result or a guaranteed latency bound.
