@@ -294,9 +294,7 @@ def test_keeps_stray_text_diagnostics_in_root_source_order(tmp_path):
 
     assert result.diagnostics == (
         root_group(
-            diagnostic_group(
-                "loadAfter", StrayTextDiagnostic("FIRST", "<li> entries")
-            ),
+            diagnostic_group("loadAfter", StrayTextDiagnostic("FIRST", "<li> entries")),
             diagnostic_group(
                 "modDependencies",
                 StrayTextDiagnostic("SECOND", "dependency <li> entries"),
@@ -474,9 +472,7 @@ def test_reports_text_outside_versioned_description_groups(tmp_path):
 )
 def test_rejects_missing_or_unusable_package_id(tmp_path, package_id_xml):
     """Keep the root package identifier strict while relaxing descriptive data."""
-    xml = MINIMAL_XML.replace(
-        "<packageId>example.mod</packageId>", package_id_xml
-    )
+    xml = MINIMAL_XML.replace("<packageId>example.mod</packageId>", package_id_xml)
 
     with pytest.raises(ValueError):
         parse_text(tmp_path, xml)
@@ -511,17 +507,17 @@ def test_reports_missing_descriptive_fields_without_failing(tmp_path):
 
 def test_reports_empty_descriptive_fields_without_failing(tmp_path):
     """Return absent scalar values and empty collections for explicit blanks."""
-    xml = MINIMAL_XML.replace(
-        "<name>Example Mod</name>", "<name> </name>"
-    ).replace(
-        "<author>First Author, Second Author</author>", "<author/>"
-    ).replace(
-        "<description>A test mod.</description>", "<description> </description>"
-    ).replace(
-        "<supportedVersions><li>1.6</li></supportedVersions>",
-        "<supportedVersions/>",
-    ).replace(
-        "</ModMetaData>", "<authors/>\n</ModMetaData>"
+    xml = (
+        MINIMAL_XML.replace("<name>Example Mod</name>", "<name> </name>")
+        .replace("<author>First Author, Second Author</author>", "<author/>")
+        .replace(
+            "<description>A test mod.</description>", "<description> </description>"
+        )
+        .replace(
+            "<supportedVersions><li>1.6</li></supportedVersions>",
+            "<supportedVersions/>",
+        )
+        .replace("</ModMetaData>", "<authors/>\n</ModMetaData>")
     )
 
     result = parse_text(tmp_path, xml)
@@ -543,9 +539,7 @@ def test_reports_empty_descriptive_fields_without_failing(tmp_path):
 
 def test_reports_missing_base_description_with_versioned_descriptions(tmp_path):
     """Keep version-specific descriptions when the base description is absent."""
-    xml = MINIMAL_XML.replace(
-        "<description>A test mod.</description>", ""
-    ).replace(
+    xml = MINIMAL_XML.replace("<description>A test mod.</description>", "").replace(
         "</ModMetaData>",
         "<descriptionsByVersion><v1.6>Version description</v1.6>"
         "</descriptionsByVersion></ModMetaData>",
@@ -557,17 +551,14 @@ def test_reports_missing_base_description_with_versioned_descriptions(tmp_path):
     assert result.value.descriptions_by_version == (
         VersionedDescription("1.6", "Version description"),
     )
-    assert result.diagnostics == (
-        root_group(MissingFieldDiagnostic("description")),
-    )
+    assert result.diagnostics == (root_group(MissingFieldDiagnostic("description")),)
 
 
 def test_skips_unusable_supported_versions_and_keeps_valid_neighbors(tmp_path):
     """Keep supported-version entries around malformed list items."""
     xml = MINIMAL_XML.replace(
         "<supportedVersions><li>1.6</li></supportedVersions>",
-        "<supportedVersions><li><b>bad</b></li><li>1.5</li>"
-        "</supportedVersions>",
+        "<supportedVersions><li><b>bad</b></li><li>1.5</li></supportedVersions>",
     )
 
     result = parse_text(tmp_path, xml)
@@ -599,9 +590,7 @@ def test_empty_supported_versions_after_bad_entries_returns_empty_tuple(tmp_path
         root_group(
             diagnostic_group(
                 "supportedVersions",
-                diagnostic_group(
-                    "li", UnexpectedElementDiagnostic("b", "plain text")
-                ),
+                diagnostic_group("li", UnexpectedElementDiagnostic("b", "plain text")),
                 EmptyValueDiagnostic(),
             ),
         ),
@@ -865,7 +854,7 @@ def test_indexes_repeated_unknown_dependency_fields_and_attributes(tmp_path):
     """Give repeated unknown fields distinct contexts in both focused scans."""
     xml = MINIMAL_XML.replace(
         "</ModMetaData>",
-        '<modDependencies><li><packageId>dep.mod</packageId>'
+        "<modDependencies><li><packageId>dep.mod</packageId>"
         '<hint source="first"/><hint source="second"/></li>'
         "</modDependencies></ModMetaData>",
     )
@@ -879,12 +868,8 @@ def test_indexes_repeated_unknown_dependency_fields_and_attributes(tmp_path):
                 "modDependencies",
                 diagnostic_group(
                     "li",
-                    diagnostic_group(
-                        "hint", UnknownFieldDiagnostic("hint"), index=1
-                    ),
-                    diagnostic_group(
-                        "hint", UnknownFieldDiagnostic("hint"), index=2
-                    ),
+                    diagnostic_group("hint", UnknownFieldDiagnostic("hint"), index=1),
+                    diagnostic_group("hint", UnknownFieldDiagnostic("hint"), index=2),
                 ),
             ),
         ),

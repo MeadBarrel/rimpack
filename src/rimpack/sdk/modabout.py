@@ -567,9 +567,7 @@ def _parse_versioned_dependency_container(
     for version_element in container:
         version_result = _version_from_tag(version_element)
         dependency_result = _dependency_list(version_element)
-        local_diagnostics = (
-            version_result.diagnostics + dependency_result.diagnostics
-        )
+        local_diagnostics = version_result.diagnostics + dependency_result.diagnostics
         diagnostics.extend(
             group_diagnostics(
                 _context_for_child(container, version_element), local_diagnostics
@@ -669,8 +667,9 @@ def _parse_authors(root: ET.Element) -> XmlParseResult[tuple[str, ...]]:
         if not authors_result.diagnostics:
             empty_list_result = XmlParseResult((), (EmptyValueDiagnostic(),))
             diagnostics.extend(
-                _contextualize_child(root, authors_elements[0], empty_list_result)
-                .diagnostics
+                _contextualize_child(
+                    root, authors_elements[0], empty_list_result
+                ).diagnostics
             )
     elif not authors and not diagnostics:
         diagnostics.append(MissingFieldDiagnostic("author or authors"))

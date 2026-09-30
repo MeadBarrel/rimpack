@@ -99,16 +99,16 @@ def _absolute(path: Path) -> Path:
 def _actually_absent(path: Path) -> bool:
     """Distinguish missing entries from dangling symlinks, including ancestors.
 
-    Called only after stat/read reports FileNotFoundError. Existing symlinks
-    must stat successfully before absence can be accepted; other OS errors
-    propagate instead of masquerading as missing configuration.
+    Called only after stat/read reports FileNotFoundError. Existing symlinks and
+    Windows directory junctions must stat successfully before absence can be
+    accepted; other OS errors propagate instead of masquerading as missing.
     """
     for candidate in (path, *path.parents):
         try:
             metadata = candidate.lstat()
         except FileNotFoundError:
             continue
-        if stat.S_ISLNK(metadata.st_mode):
+        if stat.S_ISLNK(metadata.st_mode) or candidate.is_junction():
             candidate.stat()
         return candidate != path
     return True
@@ -156,6 +156,40 @@ def _yaml_error(path: Path, error: YAMLError) -> ConfigParseError:
     return ConfigParseError(path, "$", message, line=line, column=column)
 
 
+def _has_traceback_frame(error: BaseException, *, module: str, function: str) -> bool:
+    """Return whether an exception originated in one exact library function."""
+    traceback = error.__traceback__
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if (
+            frame.f_globals.get("__name__") == module
+            and frame.f_code.co_name == function
+        ):
+            return True
+        traceback = traceback.tb_next
+    return False
+
+
+def _unsupported_yaml_version(error: KeyError) -> bool:
+    """Identify StrictYAML's resolver lookup failure for an unknown YAML version."""
+    version = error.args[0] if len(error.args) == 1 else None
+    return (
+        isinstance(version, tuple)
+        and len(version) == 2
+        and all(isinstance(part, int) for part in version)
+        and _has_traceback_frame(
+            error, module="strictyaml.ruamel.resolver", function="resolve"
+        )
+    )
+
+
+def _unsupported_complex_mapping_key(error: AssertionError) -> bool:
+    """Identify StrictYAML's assertion for a non-scalar mapping key."""
+    return error.args == (tuple,) and _has_traceback_frame(
+        error, module="strictyaml.yamlpointer", function="key"
+    )
+
+
 def _invalid_unicode_escape(error: ValueError) -> bool:
     """Identify StrictYAML's narrow out-of-range Unicode escape scanner failure.
 
@@ -164,16 +198,11 @@ def _invalid_unicode_escape(error: ValueError) -> bool:
     """
     if str(error) != "chr() arg not in range(0x110000)":
         return False
-    traceback = error.__traceback__
-    while traceback is not None:
-        frame = traceback.tb_frame
-        if (
-            frame.f_globals.get("__name__") == "strictyaml.ruamel.scanner"
-            and frame.f_code.co_name == "scan_flow_scalar_non_spaces"
-        ):
-            return True
-        traceback = traceback.tb_next
-    return False
+    return _has_traceback_frame(
+        error,
+        module="strictyaml.ruamel.scanner",
+        function="scan_flow_scalar_non_spaces",
+    )
 
 
 def _raise_validation_error(path: Path, error: ValidationError) -> NoReturn:
@@ -216,6 +245,18 @@ def parse_config_yaml(path: str | Path) -> ConfigLoadResult:
         document = load(source).data
     except YAMLError as error:
         raise _yaml_error(source_path, error) from error
+    except KeyError as error:
+        if not _unsupported_yaml_version(error):
+            raise
+        raise ConfigParseError(
+            source_path, "$", f"unsupported YAML version: {error.args[0]}"
+        ) from error
+    except AssertionError as error:
+        if not _unsupported_complex_mapping_key(error):
+            raise
+        raise ConfigParseError(
+            source_path, "$", "YAML mapping keys must be scalar strings"
+        ) from error
     except ValueError as error:
         if not _invalid_unicode_escape(error):
             raise

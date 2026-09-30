@@ -74,7 +74,7 @@ def _add_unique_path(paths: dict[str, Path], path: Path) -> None:
         if "\x00" in str(path) or not path.is_absolute():
             return
         key = _normalized_path_key(path)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return
     paths.setdefault(key, path)
 
@@ -119,7 +119,7 @@ def _logical_drive_roots() -> tuple[Path, ...]:
     """Enumerate Windows logical drive roots without traversing their contents."""
     try:
         mask = ctypes.windll.kernel32.GetLogicalDrives()  # type: ignore[attr-defined]
-    except (AttributeError, OSError):
+    except AttributeError, OSError:
         return ()
     return tuple(
         Path(f"{chr(ord('A') + index)}:\\")
@@ -252,9 +252,7 @@ def _parse_vdf_entries(
             value_token = tokens[position]
             if value_token.kind == "open":
                 position += 1
-                value: str | tuple[_VdfEntry, ...] = parse_block(
-                    depth + 1, nested=True
-                )
+                value: str | tuple[_VdfEntry, ...] = parse_block(depth + 1, nested=True)
             elif value_token.kind == "string":
                 value = value_token.value
                 position += 1
@@ -292,9 +290,7 @@ def _read_vdf(path: Path) -> tuple[_VdfEntry, ...]:
     return _parse_vdf(text)
 
 
-def _single_named_entry(
-    entries: tuple[_VdfEntry, ...], name: str
-) -> _VdfEntry | None:
+def _single_named_entry(entries: tuple[_VdfEntry, ...], name: str) -> _VdfEntry | None:
     """Return one uniquely named direct entry, ignoring nested descendants."""
     matches = [entry for entry in entries if entry.key.casefold() == name.casefold()]
     return matches[0] if len(matches) == 1 else None
@@ -317,7 +313,7 @@ def _absolute_metadata_path(raw_path: str) -> Path | None:
         path = Path(value)
         if not path.is_absolute():
             return None
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return path
 
@@ -372,7 +368,7 @@ def _manifest_install_directory(path: Path) -> str | None:
     """Return the app's top-level safe install directory for a supported manifest."""
     try:
         entries = _read_vdf(path)
-    except (OSError, _VdfParseError, ValueError):
+    except OSError, _VdfParseError, ValueError:
         return None
     app_state = _single_named_entry(entries, "AppState")
     if app_state is None or not isinstance(app_state.value, tuple):
@@ -392,7 +388,7 @@ def _path_is_within(path: Path, directory: Path) -> bool:
         resolved_path = path.resolve(strict=True)
         resolved_directory = directory.resolve(strict=True)
         resolved_path.relative_to(resolved_directory)
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return False
     return True
 
@@ -407,8 +403,7 @@ def _has_rimworld_markers(game_path: Path, common_path: Path) -> bool:
     if not has_game_executable:
         return False
     return any(
-        (game_path / directory).is_dir()
-        for directory in _KNOWN_GAME_DATA_DIRECTORIES
+        (game_path / directory).is_dir() for directory in _KNOWN_GAME_DATA_DIRECTORIES
     )
 
 
@@ -421,7 +416,7 @@ def _discover_from_roots(
     for candidate in root_candidates:
         try:
             root = Path(candidate)
-        except (OSError, TypeError, ValueError):
+        except OSError, TypeError, ValueError:
             continue
         _add_unique_path(roots, root)
 
@@ -430,7 +425,7 @@ def _discover_from_roots(
         try:
             if not steamapps.is_dir():
                 continue
-        except (OSError, ValueError):
+        except OSError, ValueError:
             continue
         _add_unique_path(libraries, root)
         libraryfolders = steamapps / "libraryfolders.vdf"
@@ -438,7 +433,7 @@ def _discover_from_roots(
             if not libraryfolders.is_file():
                 continue
             entries = _read_vdf(libraryfolders)
-        except (OSError, _VdfParseError, ValueError):
+        except OSError, _VdfParseError, ValueError:
             continue
         for library_path in _library_paths(entries):
             _add_unique_path(libraries, library_path)
@@ -457,9 +452,7 @@ def _discover_from_roots(
         if not _has_rimworld_markers(game_path, common_path):
             continue
 
-        workshop_candidate = (
-            steamapps / "workshop" / "content" / APP_ID
-        )
+        workshop_candidate = steamapps / "workshop" / "content" / APP_ID
         try:
             workshop_path = workshop_candidate if workshop_candidate.is_dir() else None
         except OSError:

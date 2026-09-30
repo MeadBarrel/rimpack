@@ -33,7 +33,7 @@ def _write_manifest(
     steamapps.mkdir(parents=True, exist_ok=True)
     manifest = steamapps / "appmanifest_294100.acf"
     manifest.write_text(
-        f'{_quoted(root_name)} {{\n'
+        f"{_quoted(root_name)} {{\n"
         f'  "appid" "{app_id}"\n'
         f'  "installdir" "{install_dir}"\n'
         "}\n",
@@ -55,9 +55,7 @@ def _make_install(
     (game / "Data").mkdir()
     _write_manifest(library, install_dir=install_dir)
     if workshop:
-        (library / "steamapps" / "workshop" / "content" / "294100").mkdir(
-            parents=True
-        )
+        (library / "steamapps" / "workshop" / "content" / "294100").mkdir(parents=True)
     return game
 
 
@@ -157,7 +155,7 @@ def test_only_direct_numeric_library_paths_are_trusted(tmp_path: Path):
     steamapps.mkdir(parents=True)
     (steamapps / "libraryfolders.vdf").write_text(
         '"libraryfolders" { "0" { "apps" { "path" '
-        f'{_quoted(str(unrelated_library))} }} }}\n',
+        f"{_quoted(str(unrelated_library))} }} }}\n",
         encoding="utf-8",
     )
 
@@ -170,8 +168,7 @@ def test_manifest_fields_must_be_direct_children_of_app_state(tmp_path: Path):
     game = _make_install(library)
     manifest = library / "steamapps" / "appmanifest_294100.acf"
     manifest.write_text(
-        '"AppState" { "Other" { "appid" "294100" '
-        '"installdir" "RimWorld" } }\n',
+        '"AppState" { "Other" { "appid" "294100" "installdir" "RimWorld" } }\n',
         encoding="utf-8",
     )
 
@@ -218,9 +215,12 @@ def test_wrong_or_missing_app_id_and_missing_game_markers_are_rejected(
     missing_id_game = _make_install(missing_id_library)
     _write_manifest(missing_id_library, app_id="")
 
-    assert _discover_from_roots(
-        [wrong_id_library, missing_markers_library, missing_id_library]
-    ) == ()
+    assert (
+        _discover_from_roots(
+            [wrong_id_library, missing_markers_library, missing_id_library]
+        )
+        == ()
+    )
     assert wrong_game.exists() and missing_id_game.exists()
 
 
@@ -315,9 +315,7 @@ def test_discovery_does_not_walk_game_or_workshop_trees(tmp_path: Path, monkeypa
     """Validate only named root markers and never enumerate nested mod content."""
     library = tmp_path / "library"
     game = _make_install(library)
-    workshop_item = (
-        library / "steamapps" / "workshop" / "content" / "294100" / "12345"
-    )
+    workshop_item = library / "steamapps" / "workshop" / "content" / "294100" / "12345"
     (workshop_item / "Mods").mkdir(parents=True)
     (workshop_item / "Mods" / "fake-game.exe").write_bytes(b"must not be inspected")
 

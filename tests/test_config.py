@@ -3,6 +3,7 @@
 import os
 import socket
 import stat
+import subprocess
 from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -583,6 +584,10 @@ def test_rejects_nonmapping_documents(tmp_path: Path, source: str) -> None:
 @pytest.mark.parametrize(
     "source",
     [
+        "%YAML 1.3\n---\nmods_path: game\n",
+        "%YAML 1.0\n---\nmods_path: game\n",
+        "?\n  - x\n  - y\n: value\n",
+        "unknown:\n  ?\n    - x\n    - y\n  : value\n",
         "extra_mod_paths: []\n",
         "unknown: {nested: value}\n",
         "rimworld_path: !!str game\n",
@@ -604,8 +609,15 @@ def test_rejects_unsupported_or_malformed_yaml_with_source_marks(
 
     assert error.value.path == tmp_path / "profile" / "settings.yml"
     assert error.value.location == "$"
-    assert error.value.line is not None and error.value.line >= 1
-    assert error.value.column is not None and error.value.column >= 1
+    if source.startswith("%YAML"):
+        assert error.value.message.startswith("unsupported YAML version")
+        assert error.value.line is None and error.value.column is None
+    elif source.startswith("?") or source.startswith("unknown:") and "  ?" in source:
+        assert error.value.message == "YAML mapping keys must be scalar strings"
+        assert error.value.line is None and error.value.column is None
+    else:
+        assert error.value.line is not None and error.value.line >= 1
+        assert error.value.column is not None and error.value.column >= 1
 
 
 def test_validation_errors_preserve_structured_pydantic_context(tmp_path: Path) -> None:
@@ -667,6 +679,23 @@ def test_invalid_controls_in_comment_only_documents_are_config_errors(
     assert error.value.path == path
     assert error.value.location == "$"
     assert error.value.message.startswith("unacceptable character")
+
+
+@pytest.mark.parametrize("error", [KeyError((1, 3)), AssertionError(tuple)])
+def test_unrelated_yaml_library_errors_are_not_hidden(
+    tmp_path: Path, monkeypatch, error: Exception
+) -> None:
+    """Only translate known StrictYAML failures from their specific call frames."""
+    path = write_config(tmp_path, "rimworld_path: game\n")
+
+    def broken_loader(*args, **kwargs):
+        """Raise a matching exception without a StrictYAML-origin traceback."""
+        raise error
+
+    monkeypatch.setattr(config, "load", broken_loader)
+    with pytest.raises(type(error)) as caught:
+        parse_config_yaml(path)
+    assert caught.value is error
 
 
 def test_unrelated_internal_attribute_errors_are_not_hidden(
@@ -973,8 +1002,11 @@ def test_dangling_default_ancestor_is_not_an_absent_default(
         load_config()
 
 
-def test_dangling_default_ancestor_is_detected_without_symlink_privileges(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize(
+    ("mode", "is_junction"), [(stat.S_IFLNK, False), (stat.S_IFDIR, True)]
+)
+def test_dangling_default_ancestor_links_are_detected_without_privileges(
+    tmp_path: Path, monkeypatch, mode: int, is_junction: bool
 ) -> None:
     """Exercise dangling ancestor checks on hosts that cannot create symlinks."""
     set_home(monkeypatch, tmp_path)
@@ -994,12 +1026,43 @@ def test_dangling_default_ancestor_is_detected_without_symlink_privileges(
         if source == path:
             raise FileNotFoundError("test missing settings beneath link")
         if source == directory:
-            return SimpleNamespace(st_mode=stat.S_IFLNK)
+            return SimpleNamespace(st_mode=mode)
         return original_lstat(source, *args, **kwargs)
+
+    def junction_check(source: Path) -> bool:
+        """Model a directory junction while leaving normal ancestors untouched."""
+        return source == directory and is_junction
 
     monkeypatch.setattr(Path, "stat", missing_stat)
     monkeypatch.setattr(Path, "lstat", link_lstat)
+    monkeypatch.setattr(Path, "is_junction", junction_check, raising=False)
     with pytest.raises(FileNotFoundError, match="test dangling ancestor"):
+        load_config()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory junctions")
+def test_dangling_default_windows_junction_is_not_absent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Treat an actual broken Windows directory junction as a filesystem error."""
+    home = tmp_path / "home"
+    home.mkdir()
+    junction = home / ".rimpack"
+    missing_target = home / "missing-directory"
+    missing_target.mkdir()
+    completed = subprocess.run(
+        ["cmd.exe", "/c", "mklink", "/J", str(junction), str(missing_target)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        pytest.skip(f"could not create test junction: {completed.stderr}")
+    missing_target.rmdir()
+    assert junction.is_junction()
+    set_home(monkeypatch, home)
+
+    with pytest.raises(FileNotFoundError):
         load_config()
 
 
