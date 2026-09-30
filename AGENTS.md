@@ -7,10 +7,11 @@ Write clear, human-friendly docstrings for every function, including private hel
 ## Documentation responsibilities
 
 Read [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md) before implementation work
-and keep relevant technical decisions and caveats there. Do not add notes that
-merely restate behavior obvious from the code; reserve notes for non-obvious
-rationale, constraints, and future guidance. Clearly distinguish planned guidance
-from implemented behavior.
+and keep relevant technical decisions and caveats there. Before changing
+[IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md), ask the user for approval. Do
+not add notes that merely restate behavior obvious from the code; reserve notes
+for non-obvious rationale, constraints, and future guidance. Clearly distinguish
+planned guidance from implemented behavior.
 
 Specifications describe product intent. Agents must not edit specifications merely
 to document implementation details, library limitations, or internal design
