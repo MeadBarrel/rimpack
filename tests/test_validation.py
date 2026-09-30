@@ -1,5 +1,6 @@
 """Tests for schema-derived dataclass-union selection and its support contract."""
 
+import json
 from dataclasses import InitVar, field
 from enum import Enum
 from pathlib import Path
@@ -24,8 +25,6 @@ from pydantic_core import CoreSchema, core_schema
 
 from rimpack.sdk._validation import EmptyableList, SelectByRequiredField
 from rimpack.sdk.module import (
-    AlsModRecord,
-    AlsModReferenced,
     LocModRecord,
     LocModReferenced,
     ModRecords,
@@ -50,15 +49,12 @@ mods:
       - pid: before.pid
       - wid: 12
       - loc: mods/before-local
-      - als: before_alias
     after:
       - pid: after.pid
       - wid: 34
       - loc: mods/after-local
-      - als: after_alias
   - wid: 000123
   - loc: mods/local
-  - als: an_alias
 """
 
 
@@ -140,7 +136,6 @@ def test_production_collections_dispatch_all_record_variants() -> None:
             {"pid": "package.mod"},
             {"wid": "123"},
             {"loc": "mods/local"},
-            {"als": "module_alias"},
         ]
     )
     reference_records = TypeAdapter(ReferencedModRecords).validate_python(
@@ -148,7 +143,6 @@ def test_production_collections_dispatch_all_record_variants() -> None:
             {"pid": "package.mod"},
             {"wid": "123"},
             {"loc": "mods/local"},
-            {"als": "module_alias"},
         ]
     )
 
@@ -156,14 +150,76 @@ def test_production_collections_dispatch_all_record_variants() -> None:
         PidModRecord,
         WidModRecord,
         LocModRecord,
-        AlsModRecord,
     ]
     assert [type(record) for record in reference_records] == [
         PidModReferenced,
         WidModReferenced,
         LocModReferenced,
-        AlsModReferenced,
     ]
+
+
+@pytest.mark.parametrize(
+    "collection_type", [ModRecords, ReferencedModRecords], ids=["mods", "references"]
+)
+@pytest.mark.parametrize(
+    "identity", [None, ("pid", "supported.mod"), ("wid", "123"), ("loc", "mods/local")]
+)
+def test_production_collections_reject_alias_references(
+    collection_type: Any, identity: tuple[str, str] | None
+) -> None:
+    """Reject alias mappings through both production collection adapters."""
+    reference = {"als": "valid_alias"}
+    expected_location = (0,)
+    expected_type = "variant_key_error"
+    if identity is not None:
+        reference[identity[0]] = identity[1]
+        expected_location += (identity[0], "als")
+        expected_type = "unexpected_keyword_argument"
+
+    with pytest.raises(ValidationError) as error:
+        TypeAdapter(collection_type).validate_python([reference])
+
+    details = error.value.errors(include_input=False, include_url=False)
+    assert len(details) == 1
+    assert details[0]["loc"] == expected_location
+    assert details[0]["type"] == expected_type
+
+
+@pytest.mark.parametrize("json_input", [False, True], ids=["python", "json"])
+@pytest.mark.parametrize("location", ["mods", "before", "after"])
+@pytest.mark.parametrize(
+    "identity", [None, ("pid", "supported.mod"), ("wid", "123"), ("loc", "mods/local")]
+)
+def test_module_validation_rejects_alias_references_in_python_and_json(
+    json_input: bool, location: str, identity: tuple[str, str] | None
+) -> None:
+    """Reject aliases in module entries and ordering targets for both input paths."""
+    reference = {"als": "valid_alias"}
+    if identity is not None:
+        reference[identity[0]] = identity[1]
+    if location == "mods":
+        record = reference
+        expected_location = ("mods", 0)
+    else:
+        record = {"pid": "parent.mod", location: [reference]}
+        expected_location = ("mods", 0, "pid", location, 0)
+    expected_type = "variant_key_error"
+    if identity is not None:
+        expected_location += (identity[0], "als")
+        expected_type = "unexpected_keyword_argument"
+
+    raw_module = {"name": "no_aliases", "mods": [record]}
+    adapter = TypeAdapter(Module)
+    with pytest.raises(ValidationError) as error:
+        if json_input:
+            adapter.validate_json(json.dumps(raw_module))
+        else:
+            adapter.validate_python(raw_module)
+
+    details = error.value.errors(include_input=False, include_url=False)
+    assert len(details) == 1
+    assert details[0]["loc"] == expected_location
+    assert details[0]["type"] == expected_type
 
 
 def test_all_variants_and_nested_constraints_preserve_order_and_values(
@@ -175,19 +231,16 @@ def test_all_variants_and_nested_constraints_preserve_order_and_values(
         PidModRecord,
         WidModRecord,
         LocModRecord,
-        AlsModRecord,
     ]
     assert [type(reference) for reference in module.mods[0].before] == [
         PidModReferenced,
         WidModReferenced,
         LocModReferenced,
-        AlsModReferenced,
     ]
     assert [type(reference) for reference in module.mods[0].after] == [
         PidModReferenced,
         WidModReferenced,
         LocModReferenced,
-        AlsModReferenced,
     ]
     assert module.mods[0].pid == "Main.Mod"
     assert module.mods[0].reference.value == "main.mod"
@@ -201,18 +254,15 @@ def test_all_variants_and_nested_constraints_preserve_order_and_values(
                     module.mods[0].before[0].reference,
                     module.mods[0].before[1].reference,
                     module.mods[0].before[2].reference,
-                    module.mods[0].before[3].reference,
                 ),
                 (
                     module.mods[0].after[0].reference,
                     module.mods[0].after[1].reference,
                     module.mods[0].after[2].reference,
-                    module.mods[0].after[3].reference,
                 ),
             ),
             (module.mods[1].reference, (), ()),
             (module.mods[2].reference, (), ()),
-            (module.mods[3].reference, (), ()),
         ),
     )
 
@@ -231,7 +281,6 @@ def test_python_json_roundtrips_keep_concrete_variants_and_values(
         PidModRecord,
         WidModRecord,
         LocModRecord,
-        AlsModRecord,
     ]
 
 
@@ -244,7 +293,6 @@ def test_string_scalars_reach_the_selected_variant_validator(
         ("wid", "0", "value_error"),
         ("wid", "false", "value_error"),
         ("loc", '""', "value_error"),
-        ("als", '""', "value_error"),
     )
     for key, value, expected_type in cases:
         error = _parse_failure(
@@ -273,7 +321,7 @@ mods:
   - pid: 123
   - pid: 2025-99-99
   - loc: false
-  - als: null
+  - loc: null
 """,
         )
     )
@@ -286,8 +334,8 @@ mods:
     ]
     assert isinstance(module.mods[5], LocModRecord)
     assert module.mods[5].loc.as_posix() == "false"
-    assert isinstance(module.mods[6], AlsModRecord)
-    assert module.mods[6].als == "null"
+    assert isinstance(module.mods[6], LocModRecord)
+    assert module.mods[6].loc.as_posix() == "null"
 
 
 def test_missing_ambiguous_and_unknown_variant_keys_are_item_errors(
@@ -322,9 +370,7 @@ def test_missing_ambiguous_and_unknown_variant_keys_are_item_errors(
         assert len(details) == 1
         assert details[0]["loc"] == expected_location
         assert details[0]["type"] == "variant_key_error"
-        assert details[0]["msg"] == (
-            "Expected exactly one variant key (pid, wid, loc, als)"
-        )
+        assert details[0]["msg"] == "Expected exactly one variant key (pid, wid, loc)"
 
 
 def test_error_boundary_aggregates_relevant_details_and_suppresses_chaining(

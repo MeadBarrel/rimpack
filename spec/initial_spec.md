@@ -4,6 +4,10 @@ Rimpack is a Git-friendly command-line mod manager for RimWorld.
 
 A modpack is defined by `modpack.yml` and one or more module files.
 
+Mod aliases are planned for a future version and are out of current scope. The
+`aliases` modpack field and `als` references are not currently supported; the
+future design is retained in [aliases.md](aliases.md).
+
 Typical structure:
 
 ```text
@@ -21,9 +25,6 @@ modules:
   - modules/ludeon.yml
   - modules/frameworks.yml
   - modules/core.yml
-
-aliases:
-  - aliases.yml
 ```
 
 `modules/ludeon.yml`
@@ -63,7 +64,7 @@ as empty. An explicitly empty list may be written with a blank scalar (`mods:` o
 are not supported.
 
 Each mod is represented by a mapping with exactly one reference field (`pid`, `wid`,
-`loc`, or `als`), and may also contain `before` and/or `after`. No other fields are
+or `loc`), and may also contain `before` and/or `after`. No other fields are
 currently supported. Mod entries and repeated constraints retain their source order;
 parsing does not sort or deduplicate them.
 
@@ -119,11 +120,16 @@ Absolute paths remain absolute.
 loc: mods/my-local-mod
 ```
 
-### `als`
+### `als` (future, out of scope)
 
-Reference to a mod alias. Alias names use the same ASCII identifier pattern as module
-names. Parsing preserves the alias reference without checking whether it is defined.
-Alias definitions and resolution semantics are described in [aliases.md](aliases.md).
+The planned `als` reference identifies a mod alias. Alias names will use the same
+ASCII identifier pattern as module names. Future parsing will preserve the alias
+reference without checking whether it is defined; definitions and resolution
+semantics are retained in [aliases.md](aliases.md).
+
+Current module parsing rejects `als` in `mods`, `before`, and `after`, including
+when it accompanies a supported reference field. The following example is for
+future implementation only:
 
 ```yaml
 als: my_aliased_mod
@@ -174,8 +180,8 @@ Sorting behavior, constraint resolution, and ordering semantics are described in
 A module file is one YAML document with a mapping root and a required `name` field.
 `mods` may be omitted; a missing or blank `mods`, `before`, or `after` value means
 an empty list. Empty files/documents, non-mapping roots, multiple documents, duplicate
-mapping keys, unknown fields, flow-style collections, explicit tags, anchors, and
-aliases are errors. Collections with entries use block-style YAML.
+mapping keys, unknown fields, flow-style collections, explicit tags, YAML anchors,
+and YAML aliases are errors. Collections with entries use block-style YAML.
 
 All untagged scalar values are read as text. Their validity depends on the destination
 field: for example, `pid: null` is the text `null`, while `wid: null` is invalid

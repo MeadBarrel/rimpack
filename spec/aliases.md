@@ -1,3 +1,11 @@
+# Aliases (future, out of scope)
+
+Mod-alias support is planned for a future version and is not part of the current
+scope. This document preserves the intended future behavior: all requirements
+and examples below apply only when alias support is implemented. The `aliases`
+modpack field is not currently supported, and module entries and ordering
+constraints reject `als` references.
+
 ## Description
 
 Aliases provide stable names for mods that may be identified or located in multiple ways.

@@ -2,8 +2,8 @@
 
 The YAML-facing ``*ModReferenced`` and ``*ModRecord`` classes preserve source
 values and structure. Their ``reference`` properties produce internal identity
-values; resolving those identities against installed mods, aliases, or the
-modpack root is a later operation.
+values; resolving those identities against installed mods or the modpack root
+is a later operation.
 """
 
 import re
@@ -94,13 +94,6 @@ class LocReference:
     value: Path
 
 
-@dataclass(frozen=True)
-class AlsReference:
-    """Internal alias identity, not yet resolved through alias definitions."""
-
-    value: str
-
-
 @validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class _PidRecordBase:
     """Shared package-ID field and conversion for sibling YAML record types."""
@@ -178,24 +171,6 @@ class _LocRecordBase:
 
 
 @validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class _AlsRecordBase:
-    """Shared alias-name field and conversion for sibling YAML record types."""
-
-    als: StrictStr
-
-    @field_validator("als")
-    @classmethod
-    def _validate_als(cls, value: str) -> str:
-        """Require an alias identifier and preserve its source spelling."""
-        return _validated_identifier(value, "alias name")
-
-    @property
-    def reference(self) -> AlsReference:
-        """Return an internal identity for this unresolved alias name."""
-        return AlsReference(self.als)
-
-
-@validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class PidModReferenced(_PidRecordBase):
     """Reference-only YAML mapping such as ``{pid: package.id}``."""
 
@@ -210,14 +185,7 @@ class LocModReferenced(_LocRecordBase):
     """Reference-only YAML mapping whose path remains unresolved."""
 
 
-@validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class AlsModReferenced(_AlsRecordBase):
-    """Reference-only YAML mapping naming an alias."""
-
-
-ReferencedModRecord = (
-    PidModReferenced | WidModReferenced | LocModReferenced | AlsModReferenced
-)
+ReferencedModRecord = PidModReferenced | WidModReferenced | LocModReferenced
 ReferencedModRecords = EmptyableList[
     Annotated[ReferencedModRecord, SelectByRequiredField()]
 ]
@@ -250,12 +218,7 @@ class LocModRecord(_LocRecordBase, ModOrderingConstraints):
     """Full YAML module entry identified by an unresolved local path."""
 
 
-@validated_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class AlsModRecord(_AlsRecordBase, ModOrderingConstraints):
-    """Full YAML module entry identified by an alias name."""
-
-
-ModRecord = PidModRecord | WidModRecord | LocModRecord | AlsModRecord
+ModRecord = PidModRecord | WidModRecord | LocModRecord
 ModRecords = EmptyableList[Annotated[ModRecord, SelectByRequiredField()]]
 
 

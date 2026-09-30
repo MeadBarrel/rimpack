@@ -7,9 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from rimpack.sdk.module import (
-    AlsModRecord,
-    AlsModReferenced,
-    AlsReference,
     LocModRecord,
     LocModReferenced,
     LocReference,
@@ -78,7 +75,7 @@ mods:
 def test_parses_all_reference_variants_and_unresolved_local_paths(
     tmp_path: Path,
 ) -> None:
-    """Parse each full-entry variant without resolving local or alias targets."""
+    """Parse each supported full-entry variant without resolving local targets."""
     module = parse_yaml(
         tmp_path,
         """name: all_refs
@@ -86,15 +83,12 @@ mods:
   - pid: Some.Author.Mod
   - wid: "000123"
   - loc: mods/not-installed
-  - als: unresolved_alias
 """,
     )
     assert isinstance(module.mods[0], PidModRecord)
     assert isinstance(module.mods[1], WidModRecord)
     assert isinstance(module.mods[2], LocModRecord)
-    assert isinstance(module.mods[3], AlsModRecord)
     assert module.mods[2].loc == Path("mods/not-installed")
-    assert module.mods[3].reference == AlsReference("unresolved_alias")
     assert module.mods[0].pid == "Some.Author.Mod"
     assert module.mods[1].wid == "000123"
     assert module.mods[1].reference == WidReference("000123")
@@ -134,7 +128,6 @@ mods:
             ("pid: other.mod", PidModReferenced),
             ("wid: 12345", WidModReferenced),
             ("loc: mods/other", LocModReferenced),
-            ("als: other_alias", AlsModReferenced),
         )
     ],
 )
@@ -249,10 +242,41 @@ def test_rejects_non_ascii_or_whitespace_package_ids(
         parse_yaml(tmp_path, f"name: pid\nmods:\n  - pid: {value}\n")
 
 
-def test_rejects_invalid_alias_identifiers(tmp_path: Path) -> None:
-    """Require aliases to use the module identifier syntax."""
-    with pytest.raises(ModuleParseError):
-        parse_yaml(tmp_path, 'name: aliases\nmods:\n  - als: "not-valid"\n')
+@pytest.mark.parametrize("location", ["mods", "before", "after"])
+@pytest.mark.parametrize(
+    "identity", [None, "pid: supported.mod", "wid: 123", "loc: mods/local"]
+)
+def test_rejects_alias_references(
+    tmp_path: Path, location: str, identity: str | None
+) -> None:
+    """Reject aliases alone or beside a supported identity at every YAML location."""
+    fields = ["als: valid_alias"]
+    if identity is not None:
+        fields.insert(0, identity)
+    if location == "mods":
+        entry = "\n    ".join(fields)
+        source = f"name: no_aliases\nmods:\n  - {entry}\n"
+        expected_location = ("mods", 0)
+    else:
+        reference = "\n        ".join(fields)
+        source = (
+            "name: no_aliases\nmods:\n  - pid: parent.mod\n"
+            f"    {location}:\n      - {reference}\n"
+        )
+        expected_location = ("mods", 0, "pid", location, 0)
+    expected_type = "variant_key_error"
+    if identity is not None:
+        expected_location += (identity.split(":")[0], "als")
+        expected_type = "unexpected_keyword_argument"
+
+    with pytest.raises(ModuleParseError) as error:
+        parse_yaml(tmp_path, source)
+
+    assert error.value.location == "$"
+    details = validation_details(error.value)
+    assert len(details) == 1
+    assert details[0]["loc"] == expected_location
+    assert details[0]["type"] == expected_type
 
 
 def test_full_entries_and_reference_records_are_siblings() -> None:
@@ -260,7 +284,6 @@ def test_full_entries_and_reference_records_are_siblings() -> None:
     assert not issubclass(PidModRecord, PidModReferenced)
     assert not issubclass(WidModRecord, WidModReferenced)
     assert not issubclass(LocModRecord, LocModReferenced)
-    assert not issubclass(AlsModRecord, AlsModReferenced)
     assert PidModRecord("a.mod", before=(PidModReferenced("b.mod"),))
 
 
@@ -372,7 +395,7 @@ mods:
   - pid: true
   - pid: false
   - pid: null
-  - als: no
+  - pid: no
   - loc: off
 """,
     )
@@ -382,7 +405,7 @@ mods:
         PidModRecord(pid="true"),
         PidModRecord(pid="false"),
         PidModRecord(pid="null"),
-        AlsModRecord(als="no"),
+        PidModRecord(pid="no"),
         LocModRecord(loc=Path("off")),
     )
 
