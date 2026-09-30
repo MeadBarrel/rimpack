@@ -53,6 +53,30 @@ list insertion, removal, and reordering. Semantic validation cannot detect lost
 or misattached comments; removing an empty field must not silently discard
 unrelated comments. No editing functionality is implemented by this note.
 
+## CLI and setup dependencies (planned)
+
+The selected stack for the shared CLI and `rimpack setup` is:
+
+- Typer for commands, options, and help; do not add Click as a separate direct
+  dependency.
+- `prompt_toolkit>=3.0.52,<4` for interactive selection, text input,
+  confirmations, and path completion. Its generic `choice()` preserves the type
+  of option values; text prompts return `str` and confirmations return `bool`.
+  Prefer it directly over Questionary or InquirerPy, whose answer APIs return
+  `Any` and would require an additional typed boundary.
+- Rich for readable warnings and final settings summaries.
+- ruamel.yaml for comment-aware settings updates, with StrictYAML retained as
+  the reader/validator. Follow the YAML editing guidance above; round-trip
+  serialization alone does not guarantee unchanged formatting.
+
+Keep prompt calls behind thin, typed Rimpack helpers for consistent styling,
+cancellation handling, and testing, without leaking `Any` into wizard logic.
+Path completion must not enforce filesystem existence: unavailable paths need
+an explicit warning-override step, as specified in `spec/setup.md`.
+
+This records the chosen stack only. Dependency additions and the CLI/setup
+implementation remain planned.
+
 ## Steam RimWorld path discovery (implemented)
 
 - SDK Steam discovery is Windows-only and is called explicitly; importing the SDK
