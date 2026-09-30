@@ -1,9 +1,10 @@
 # Command-line interface
 
 This specification describes planned shared CLI configuration behavior and the
-initial setup command. These CLI features are not yet implemented. Settings
+setup command entry point. These CLI features are not yet implemented. Settings
 fields, defaults, and discovery-source behavior are specified in
-[config.md](config.md).
+[config.md](config.md). The interactive setup contract is specified in
+[setup.md](setup.md).
 
 ## Global configuration option
 
@@ -83,14 +84,17 @@ The explicit configuration setup action is:
 rimpack setup
 ```
 
-Setup:
+Setup is an interactive, rerunnable wizard for a required RimWorld installation
+path and an optional Workshop path. It uses the same configuration selection
+rules as every other command, explicitly discovers candidates, and supports
+manual path entry. Existing values are defaults; discovery does not silently
+replace them or arbitrarily choose among multiple candidates.
 
-- Uses the same configuration selection rules as every other command.
-- Explicitly discovers installation candidates and presents them for user
-  selection; it must not arbitrarily choose among multiple candidates.
-- Saves the user's selected installation and Workshop paths to the selected
-  settings file.
-- May create the selected configuration directory and file when needed.
+The user confirms a final summary before setup saves the selected paths. Setup
+may create the selected configuration directory and file when needed, but makes
+no filesystem changes before confirmation. It preserves unrelated settings and
+content. The full selection, validation, cancellation, and saving contract is
+specified in [setup.md](setup.md).
 
 To set up an independent configuration:
 
@@ -102,8 +106,8 @@ rimpack --config ~/profiles/testing/settings.yaml setup
 Setup with an override writes to the selected location, not the default location.
 Merely loading settings never invokes setup or installation discovery.
 
-This initial specification does not prescribe the exact setup prompts or
-noninteractive setup options.
+Initial setup is interactive-only; without usable terminal input it reports an
+error and makes no filesystem changes. Exact prompt wording is not prescribed.
 
 ## Diagnostics
 

@@ -1,8 +1,9 @@
 # Global configuration
 
 This specification describes planned configuration behavior. The settings layer
-is not yet implemented. CLI selection and setup are specified separately in
-[cli.md](cli.md).
+is not yet implemented. CLI configuration selection is specified in
+[cli.md](cli.md), and the interactive setup wizard is specified in
+[setup.md](setup.md).
 
 ## Scope and storage
 

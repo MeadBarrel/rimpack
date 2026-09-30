@@ -12,11 +12,13 @@ relevant to the behavior being changed.
 | Mod references | [references.md](references.md) | `wid`, `pid`, `loc`, and the future `als` reference. |
 | Sorting | [sorting.md](sorting.md) | Preferred order, prefix protection, and ordering constraints. |
 | Global configuration (planned) | [config.md](config.md) | Settings schema, paths, defaults, validation, and discovery sources. |
-| CLI (planned) | [cli.md](cli.md) | Global `--config`, configuration selection, and `rimpack setup`. |
+| CLI (planned) | [cli.md](cli.md) | Global `--config`, configuration selection, and the setup entry point. |
+| Setup (planned) | [setup.md](setup.md) | Interactive path selection, validation, reruns, review, and saving. |
 | Aliases (future, out of scope) | [aliases.md](aliases.md) | Retained design for alias definitions and resolution. |
 
 Planned global settings are specified in [config.md](config.md). Shared CLI
-configuration selection and the setup command are specified in [cli.md](cli.md).
+configuration selection is specified in [cli.md](cli.md), and the setup wizard is
+specified in [setup.md](setup.md).
 
 Documents labeled planned or future describe intended behavior, not implemented
 features. Alias support remains outside the current scope.
