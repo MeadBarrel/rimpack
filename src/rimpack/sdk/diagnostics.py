@@ -1,4 +1,4 @@
-"""Structured diagnostic records and readable rendering for XML parsers."""
+"""Structured diagnostics and readable rendering for XML and configuration parsers."""
 
 from dataclasses import dataclass
 
@@ -108,6 +108,13 @@ class UnknownFieldDiagnostic(Diagnostic):
 
 
 @dataclass(frozen=True, slots=True)
+class UnknownConfigFieldDiagnostic(Diagnostic):
+    """Identify an ignored configuration key without XML element formatting."""
+
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
 class UnknownAttributeDiagnostic(Diagnostic):
     """Identify an XML attribute not modeled by the parser."""
 
@@ -189,6 +196,8 @@ def _render_leaf(diagnostic: Diagnostic) -> str:
         return f"Unexpected <{diagnostic.tag}>; expected {diagnostic.expected}"
     if isinstance(diagnostic, InvalidVersionTagDiagnostic):
         return f"Invalid version tag <{diagnostic.tag}>"
+    if isinstance(diagnostic, UnknownConfigFieldDiagnostic):
+        return f"Ignored config field {_quoted_text(diagnostic.name)}"
     if isinstance(diagnostic, UnknownFieldDiagnostic):
         return f"Unknown field <{diagnostic.tag}>"
     if isinstance(diagnostic, UnknownAttributeDiagnostic):

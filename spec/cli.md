@@ -1,7 +1,8 @@
 # Command-line interface
 
 This specification describes planned shared CLI configuration behavior and the
-setup command entry point. These CLI features are not yet implemented. Settings
+setup command entry point. These CLI features are not yet implemented; the SDK
+settings loader implements the selection and missing-file rules below. Settings
 fields, defaults, and discovery-source behavior are specified in
 [config.md](config.md). The interactive setup contract is specified in
 [setup.md](setup.md).
@@ -35,6 +36,9 @@ current user's home directory. Relative arguments are resolved against the
 command's current working directory, not against the default configuration
 folder. Rimpack does not expand environment-variable expressions; any expansion
 performed by the shell happens before Rimpack receives the argument.
+On Windows, drive-relative arguments such as `C:settings.yml` are rejected;
+use `C:/settings.yml` for an absolute path or `settings.yml` for a path relative
+to the working directory.
 
 After resolving the argument, select the settings file as follows:
 

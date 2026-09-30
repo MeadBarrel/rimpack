@@ -4,6 +4,7 @@ import json
 from dataclasses import InitVar, field
 from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any, TypeAlias
 
 import pytest
@@ -22,8 +23,16 @@ from pydantic import (
 )
 from pydantic.dataclasses import dataclass as validated_dataclass
 from pydantic_core import CoreSchema, core_schema
+from strictyaml import YAMLError
 
-from rimpack.sdk._validation import EmptyableList, SelectByRequiredField
+from rimpack.sdk._validation import (
+    EmptyableList,
+    SelectByRequiredField,
+    validation_error_message,
+    yaml_error_details,
+)
+from rimpack.sdk.config import ConfigParseError
+from rimpack.sdk.errors import ParseError
 from rimpack.sdk.module import (
     LocModRecord,
     LocModReferenced,
@@ -56,6 +65,71 @@ mods:
   - wid: 000123
   - loc: mods/local
 """
+
+
+@pytest.mark.parametrize("error_type", [ParseError, ModuleParseError, ConfigParseError])
+@pytest.mark.parametrize(
+    ("line", "column", "suffix"),
+    [(None, None, ""), (3, None, ":3"), (3, 7, ":3:7")],
+)
+def test_shared_parse_error_preserves_public_details(
+    error_type, line, column, suffix: str
+) -> None:
+    """Keep concrete parser exceptions and their inherited rendering unchanged."""
+    path = Path("source.yml")
+    error = error_type(path, "$", "invalid value", line=line, column=column)
+    assert isinstance(error, ValueError)
+    assert type(error) is error_type
+    assert (error.path, error.location, error.message) == (path, "$", "invalid value")
+    assert (error.line, error.column) == (line, column)
+    assert str(error) == f"{path}{suffix}: $: invalid value"
+    assert error.args == (str(error),)
+
+
+def test_shared_validation_format_preserves_order_without_raw_input() -> None:
+    """Render logical tuple locations while excluding input text and URLs."""
+    with pytest.raises(ValidationError) as caught:
+        TypeAdapter(tuple[int, int]).validate_python(
+            ["private-first", "private-second"]
+        )
+    assert validation_error_message(caught.value) == (
+        "(0,): Input should be a valid integer, unable to parse string as an integer "
+        "[int_parsing]\n"
+        "(1,): Input should be a valid integer, unable to parse string as an integer "
+        "[int_parsing]"
+    )
+
+
+def test_shared_validation_format_handles_missing_details() -> None:
+    """Provide a readable fallback when Pydantic returns no validation details."""
+    error = ValidationError.from_exception_data("Empty", [])
+    assert validation_error_message(error) == (
+        "Validation failed without structured error details"
+    )
+
+
+@pytest.mark.parametrize("has_problem_mark", [False, True])
+def test_shared_yaml_details_prefer_problem_mark(has_problem_mark: bool) -> None:
+    """Prefer problem coordinates, otherwise use context coordinates, one-based."""
+    error = YAMLError("fallback text")
+    error.problem = "bad YAML"
+    error.context_mark = SimpleNamespace(line=4, column=5)
+    if has_problem_mark:
+        error.problem_mark = SimpleNamespace(line=1, column=2)
+    assert yaml_error_details(error) == (
+        "bad YAML",
+        2 if has_problem_mark else 5,
+        3 if has_problem_mark else 6,
+    )
+
+
+def test_shared_yaml_details_do_not_invent_coordinates() -> None:
+    """Use only the first fallback message line when no source mark is available."""
+    assert yaml_error_details(YAMLError("reader failure\nmore details")) == (
+        "reader failure",
+        None,
+        None,
+    )
 
 
 def _write_yaml(tmp_path: Path, source: str) -> Path:

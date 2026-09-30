@@ -16,7 +16,13 @@ from pydantic.dataclasses import dataclass as validated_dataclass
 from strictyaml import YAMLError, load
 from strictyaml.ruamel.reader import ReaderError
 
-from rimpack.sdk._validation import EmptyableList, SelectByRequiredField
+from rimpack.sdk._validation import (
+    EmptyableList,
+    SelectByRequiredField,
+    validation_error_message,
+    yaml_error_details,
+)
+from rimpack.sdk.errors import ParseError
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _DECIMAL_PATTERN = re.compile(r"[0-9]+\Z")
@@ -240,34 +246,8 @@ class Module:
         return _validated_identifier(value, "module name")
 
 
-class ModuleParseError(ValueError):
+class ModuleParseError(ParseError):
     """Describe invalid module YAML with a source path and logical location."""
-
-    def __init__(
-        self,
-        path: Path,
-        location: str,
-        message: str,
-        *,
-        line: int | None = None,
-        column: int | None = None,
-    ) -> None:
-        """Store the source location and a concise explanation of the failure."""
-        self.path = path
-        self.location = location
-        self.message = message
-        self.line = line
-        self.column = column
-        super().__init__(self.__str__())
-
-    def __str__(self) -> str:
-        """Render the file, optional one-based source position, and logical path."""
-        source = str(self.path)
-        if self.line is not None:
-            source += f":{self.line}"
-            if self.column is not None:
-                source += f":{self.column}"
-        return f"{source}: {self.location}: {self.message}"
 
 
 def _raise_validation_error(path: Path, error: ValidationError) -> NoReturn:
@@ -277,19 +257,7 @@ def _raise_validation_error(path: Path, error: ValidationError) -> NoReturn:
     several relevant details. Branch-qualified Pydantic locations stay in the
     rendered message instead of being rewritten as source YAML coordinates.
     """
-    details = error.errors(
-        include_url=False,
-        include_context=False,
-        include_input=False,
-    )
-    message = (
-        "\n".join(
-            f"{tuple(detail['loc'])!r}: {detail['msg']} [{detail['type']}]"
-            for detail in details
-        )
-        or "Validation failed without structured error details"
-    )
-    raise ModuleParseError(path, "$", message) from None
+    raise ModuleParseError(path, "$", validation_error_message(error)) from None
 
 
 def _mapping_at(value: object, path: Path) -> dict[str, Any]:
@@ -312,15 +280,8 @@ def _empty_yaml_document(source: str) -> bool:
 
 def _yaml_error(path: Path, error: YAMLError) -> ModuleParseError:
     """Convert a StrictYAML error and any available source mark to a parse error."""
-    mark = getattr(error, "problem_mark", None) or getattr(error, "context_mark", None)
-    message = getattr(error, "problem", None) or str(error).splitlines()[0]
-    return ModuleParseError(
-        path,
-        "$",
-        message,
-        line=mark.line + 1 if mark is not None else None,
-        column=mark.column + 1 if mark is not None else None,
-    )
+    message, line, column = yaml_error_details(error)
+    return ModuleParseError(path, "$", message, line=line, column=column)
 
 
 def parse_module_yaml(path: str | Path) -> Module:

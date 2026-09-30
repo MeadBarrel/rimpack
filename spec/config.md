@@ -1,9 +1,9 @@
 # Global configuration
 
-This specification describes planned configuration behavior. The settings layer
-is not yet implemented. CLI configuration selection is specified in
-[cli.md](cli.md), and the interactive setup wizard is specified in
-[setup.md](setup.md).
+The SDK settings parser and loader implement the schema, validation, and path
+selection described here. CLI wiring, setup, and mod scanning remain planned.
+CLI configuration selection is specified in [cli.md](cli.md), and the interactive
+setup wizard is specified in [setup.md](setup.md).
 
 ## Scope and storage
 
@@ -23,6 +23,9 @@ The CLI can select an alternative configuration folder or file through
 ## Schema
 
 The settings file is a YAML mapping. All recognized fields are optional.
+Empty, whitespace-only, and comment-only files mean empty settings. This
+exception does not apply to scalar roots (including quoted empty strings) or
+files containing only document markers.
 
 | Field | Value | Meaning when omitted |
 | --- | --- | --- |
@@ -59,11 +62,16 @@ mods_path: ~/RimWorldMods
 
 Every supplied path must be a nonempty, non-whitespace string without NUL.
 Meaningful spaces are preserved; paths are not trimmed. Path syntax follows the
-host platform.
+host platform. On Windows, drive-relative forms such as `C:game` are rejected:
+use an absolute path such as `C:/game` or an ordinary relative path such as
+`game`. Rimpack does not use Windows's remembered per-drive working directories.
 
 Omission is the only way to leave an optional path unset. A blank YAML value
 such as `rimworld_path:` or an empty string such as `rimworld_path: ""` is an
 error. The same path-value validation applies to entries in `extra_mod_paths`.
+For the collection itself, omission, a blank YAML value, or a quoted empty
+string means an empty list. Whitespace-only scalars and other non-list values
+are invalid; list order and duplicates are retained.
 
 For every path value in the settings file:
 

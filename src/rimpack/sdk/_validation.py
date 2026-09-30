@@ -1,4 +1,4 @@
-"""Reusable Pydantic collection and schema-derived union validation helpers.
+"""Shared error formatting and Pydantic collection/union validation helpers.
 
 ``EmptyableList`` normalizes exactly blank strings for opted-in immutable tuple
 fields. The selector inspects generated CoreSchemas to infer each union
@@ -13,8 +13,42 @@ from dataclasses import dataclass
 from types import UnionType
 from typing import Annotated, Any, Union, cast, get_args, get_origin
 
-from pydantic import BeforeValidator, FailFast, GetCoreSchemaHandler
+from pydantic import BeforeValidator, FailFast, GetCoreSchemaHandler, ValidationError
 from pydantic_core import CoreSchema, core_schema
+from strictyaml import YAMLError
+
+
+def validation_error_message(error: ValidationError) -> str:
+    """Format aggregate validation details without inputs, context, or URLs.
+
+    Preserve Pydantic's detail order and tuple locations, including branch
+    qualifiers. These logical locations are not YAML source coordinates.
+    """
+    details = error.errors(
+        include_url=False, include_context=False, include_input=False
+    )
+    return (
+        "\n".join(
+            f"{tuple(detail['loc'])!r}: {detail['msg']} [{detail['type']}]"
+            for detail in details
+        )
+        or "Validation failed without structured error details"
+    )
+
+
+def yaml_error_details(error: YAMLError) -> tuple[str, int | None, int | None]:
+    """Extract a YAML message and optional one-based line/column coordinates.
+
+    Prefer the problem mark, falling back to the context mark. Reader failures
+    may have neither; do not invent coordinates when no source mark exists.
+    """
+    mark = getattr(error, "problem_mark", None) or getattr(error, "context_mark", None)
+    message = getattr(error, "problem", None) or str(error).splitlines()[0]
+    return (
+        message,
+        mark.line + 1 if mark is not None else None,
+        mark.column + 1 if mark is not None else None,
+    )
 
 
 def _empty_string_as_empty_collection(value: object) -> object:
