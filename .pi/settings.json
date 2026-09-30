@@ -1,0 +1,9 @@
+{
+  "subagents": {
+    "agentOverrides": {
+      "oracle": {
+        "disabled": true
+      }
+    }
+  }
+}
