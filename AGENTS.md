@@ -22,4 +22,7 @@ actual change or clarification of intended product behavior.
 
 - [PATTERNS.md](PATTERNS.md) describes design preferences.
 - [IMPLEMENTATION_NOTES.md](IMPLEMENTATION_NOTES.md) records implementation guidance and technical caveats.
-- [Specifications](spec/): [initial spec](spec/initial_spec.md), [aliases](spec/aliases.md), and [sorting](spec/sorting.md).
+- [Specification index](spec/index.md) is the entry point for product intent.
+  Read the index and relevant topic specifications before implementation or
+  specification changes. Keep the index up to date when adding, splitting, or
+  renaming specifications.
