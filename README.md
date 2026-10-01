@@ -1,3 +1,22 @@
+## Setup the CLI
+
+Run the interactive setup wizard in a terminal to choose the RimWorld installation
+and optional Workshop content folder:
+
+```sh
+rimpack setup
+```
+
+Select an alternate settings file or directory with the global `--config` option
+before the command:
+
+```sh
+rimpack --config ~/profiles/testing/settings.yaml setup
+```
+
+The wizard checks the selected paths, reviews effective Data and Mods locations,
+and asks before saving. It does not install or modify game or mod files.
+
 ## SDK configuration
 
 ```python
@@ -14,7 +33,7 @@ if result.diagnostics:
 
 Paths in YAML are relative to the selected file's directory. The SDK returns
 warnings rather than emitting them and does not create files or discover mods.
-CLI configuration wiring and interactive setup are not yet implemented.
+The interactive setup command is available through `rimpack setup`.
 
 ## Development
 

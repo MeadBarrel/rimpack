@@ -8,8 +8,12 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "prompt-toolkit>=3.0.52,<4",
     "pydantic>=2.13,<3",
+    "rich>=14,<15",
+    "ruamel-yaml>=0.18.15,<0.19",
     "strictyaml>=1.7.3,<2",
+    "typer>=0.16,<1",
 ]
 
 [dependency-groups]
