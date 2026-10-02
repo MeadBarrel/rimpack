@@ -8,16 +8,19 @@ from typing import Annotated, Any, NoReturn
 
 from pydantic import BeforeValidator, ConfigDict, ValidationError
 from pydantic.dataclasses import dataclass as validated_dataclass
-from strictyaml import YAMLError, load
-from strictyaml.ruamel.reader import Reader, ReaderError
+from ruamel.yaml.error import YAMLError
+from ruamel.yaml.reader import Reader, ReaderError
 
 from rimpack.sdk._validation import (
     EmptyableList,
     validation_error_message,
     yaml_error_details,
 )
+from rimpack.sdk._yaml import load_yaml, yaml_load_failure
 from rimpack.sdk.diagnostics import UnknownConfigFieldDiagnostic
 from rimpack.sdk.errors import ParseError
+
+_OPTIONAL_PATH_FIELDS = ("rimworld_path", "workshop_path", "data_path", "mods_path")
 
 
 def _validate_path(value: object) -> object:
@@ -151,58 +154,9 @@ def select_config_path(config: str | Path | None = None) -> Path:
 
 
 def _yaml_error(path: Path, error: YAMLError) -> ConfigParseError:
-    """Translate StrictYAML failures, retaining only available source coordinates."""
+    """Translate YAML source failures, retaining available one-based marks."""
     message, line, column = yaml_error_details(error)
     return ConfigParseError(path, "$", message, line=line, column=column)
-
-
-def _has_traceback_frame(error: BaseException, *, module: str, function: str) -> bool:
-    """Return whether an exception originated in one exact library function."""
-    traceback = error.__traceback__
-    while traceback is not None:
-        frame = traceback.tb_frame
-        if (
-            frame.f_globals.get("__name__") == module
-            and frame.f_code.co_name == function
-        ):
-            return True
-        traceback = traceback.tb_next
-    return False
-
-
-def _unsupported_yaml_version(error: KeyError) -> bool:
-    """Identify StrictYAML's resolver lookup failure for an unknown YAML version."""
-    version = error.args[0] if len(error.args) == 1 else None
-    return (
-        isinstance(version, tuple)
-        and len(version) == 2
-        and all(isinstance(part, int) for part in version)
-        and _has_traceback_frame(
-            error, module="strictyaml.ruamel.resolver", function="resolve"
-        )
-    )
-
-
-def _unsupported_complex_mapping_key(error: AssertionError) -> bool:
-    """Identify StrictYAML's assertion for a non-scalar mapping key."""
-    return error.args == (tuple,) and _has_traceback_frame(
-        error, module="strictyaml.yamlpointer", function="key"
-    )
-
-
-def _invalid_unicode_escape(error: ValueError) -> bool:
-    """Identify StrictYAML's narrow out-of-range Unicode escape scanner failure.
-
-    The bundled scanner calls chr directly for escapes beyond Unicode's range.
-    Do not translate unrelated ValueErrors from loader internals.
-    """
-    if str(error) != "chr() arg not in range(0x110000)":
-        return False
-    return _has_traceback_frame(
-        error,
-        module="strictyaml.ruamel.scanner",
-        function="scan_flow_scalar_non_spaces",
-    )
 
 
 def _raise_validation_error(path: Path, error: ValidationError) -> NoReturn:
@@ -217,7 +171,7 @@ def _resolve_path(path: Path, parent: Path) -> Path:
 
 
 def parse_config_yaml(path: str | Path) -> ConfigLoadResult:
-    """Read exactly one UTF-8 (optional BOM) strict YAML settings file.
+    """Read one UTF-8 (optional BOM) safe YAML settings document.
 
     Blank/comment-only files mean empty settings. Unknown keys produce returned
     diagnostics, but their YAML syntax is still checked. Recognized invalid
@@ -235,39 +189,22 @@ def parse_config_yaml(path: str | Path) -> ConfigLoadResult:
         not line.strip() or line.lstrip(" \t").startswith("#")
         for line in source.splitlines()
     ):
-        # Blank documents bypass YAML structure validation, not reader validation.
+        # Keep reader-level character checks without parsing tab-indented
+        # comment-only lines that this settings format accepts as blank.
         try:
             Reader(source)
         except ReaderError as error:
             raise _yaml_error(source_path, error) from error
         return ConfigLoadResult(Settings(), source_path)
     try:
-        document = load(source).data
+        document = load_yaml(source)
     except YAMLError as error:
         raise _yaml_error(source_path, error) from error
-    except KeyError as error:
-        if not _unsupported_yaml_version(error):
+    except (AssertionError, OverflowError, ValueError) as error:
+        message = yaml_load_failure(error)
+        if message is None:
             raise
-        raise ConfigParseError(
-            source_path, "$", f"unsupported YAML version: {error.args[0]}"
-        ) from error
-    except AssertionError as error:
-        if not _unsupported_complex_mapping_key(error):
-            raise
-        raise ConfigParseError(
-            source_path, "$", "YAML mapping keys must be scalar strings"
-        ) from error
-    except ValueError as error:
-        if not _invalid_unicode_escape(error):
-            raise
-        raise ConfigParseError(
-            source_path, "$", "invalid Unicode escape in YAML"
-        ) from error
-    except AttributeError as error:
-        reader_error = error.__context__
-        if not isinstance(reader_error, ReaderError):
-            raise
-        raise _yaml_error(source_path, reader_error) from error
+        raise ConfigParseError(source_path, "$", message) from error
     except RecursionError as error:
         raise ConfigParseError(source_path, "$", "YAML nesting is too deep") from error
     if not isinstance(document, dict):
@@ -282,6 +219,13 @@ def parse_config_yaml(path: str | Path) -> ConfigLoadResult:
             values[key] = value
         else:
             diagnostics.append(UnknownConfigFieldDiagnostic(key))
+    for field_name in _OPTIONAL_PATH_FIELDS:
+        if field_name in values and values[field_name] is None:
+            raise ConfigParseError(
+                source_path,
+                "$",
+                f"{field_name} must be omitted; YAML null and blank values are invalid",
+            )
     try:
         settings = Settings(**values)
     except ValidationError as error:

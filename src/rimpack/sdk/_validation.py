@@ -15,7 +15,7 @@ from typing import Annotated, Any, Union, cast, get_args, get_origin
 
 from pydantic import BeforeValidator, FailFast, GetCoreSchemaHandler, ValidationError
 from pydantic_core import CoreSchema, core_schema
-from strictyaml import YAMLError
+from ruamel.yaml.error import YAMLError
 
 
 def validation_error_message(error: ValidationError) -> str:
@@ -51,20 +51,20 @@ def yaml_error_details(error: YAMLError) -> tuple[str, int | None, int | None]:
     )
 
 
-def _empty_string_as_empty_collection(value: object) -> object:
-    """Normalize an exactly empty string before validating a collection.
+def _emptyable_collection_input(value: object) -> object:
+    """Normalize null and exactly empty strings to an empty collection.
 
-    Other values, including whitespace-only strings and ``None``, pass through
-    unchanged so the collection validator can reject them normally.
+    Whitespace-only strings and every other non-sequence value pass through so
+    the tuple validator can reject them normally.
     """
-    return [] if isinstance(value, str) and value == "" else value
+    return [] if value is None or isinstance(value, str) and value == "" else value
 
 
 # Keep FailFast on the tuple schema before the outer input normalizer is applied.
 type EmptyableList[T] = Annotated[
     tuple[T, ...],
     FailFast(),
-    BeforeValidator(_empty_string_as_empty_collection),
+    BeforeValidator(_emptyable_collection_input),
 ]
 
 

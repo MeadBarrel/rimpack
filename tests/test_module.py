@@ -207,16 +207,20 @@ def test_blank_collection_values_become_empty_tuples(
         assert getattr(record, field) == ()
 
 
-def test_module_collections_default_and_normalize_only_empty_strings() -> None:
-    """Apply the reusable emptyable-list contract to direct Module construction."""
+def test_module_collections_accept_null_and_empty_spellings() -> None:
+    """Normalize null, blank strings, and empty sequences to immutable tuples."""
     assert Module(name="implicit_empty").mods == ()
     assert Module(name="explicit_empty", mods="").mods == ()  # type: ignore[arg-type]
+    assert Module(name="null_empty", mods=None).mods == ()  # type: ignore[arg-type]
+    assert Module(name="sequence_empty", mods=[]).mods == ()  # type: ignore[arg-type]
     record = PidModRecord(pid="blank_constraints", before="")  # type: ignore[arg-type]
     assert record.before == ()
+    assert PidModRecord(pid="null_constraints", before=None).before == ()  # type: ignore[arg-type]
+    assert PidModRecord(pid="empty_constraints", after=[]).after == ()  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
-        Module(name="not_none", mods=None)  # type: ignore[arg-type]
+        Module(name="whitespace", mods=" ")  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
-        PidModRecord(pid="not_none", before=None)  # type: ignore[arg-type]
+        PidModRecord(pid="whitespace", before=" ")  # type: ignore[arg-type]
 
 
 def test_reference_values_preserve_source_and_canonicalize_pid_identity() -> None:
@@ -300,16 +304,19 @@ def test_records_are_frozen() -> None:
     ("yaml_value", "expected"),
     [
         ("123", "123"),
-        ("00123", "00123"),
+        ("00123", "123"),
+        ("+123", "123"),
+        ("1_000", "1000"),
+        ("0x7b", "123"),
         ('"00123"', "00123"),
-        ("18446744073709551615", "18446744073709551615"),
         ('"18446744073709551615"', "18446744073709551615"),
+        ("18446744073709551615", "18446744073709551615"),
     ],
 )
-def test_accepts_positive_workshop_ids_and_preserves_digit_spelling(
+def test_accepts_positive_workshop_integers_and_decimal_text(
     tmp_path: Path, yaml_value: str, expected: str
 ) -> None:
-    """Treat bare and quoted decimal scalars as text, preserving leading zeros."""
+    """Normalize native YAML integers while preserving quoted decimal spelling."""
     module = parse_yaml(tmp_path, f"name: workshop\nmods:\n  - wid: {yaml_value}\n")
     assert module.mods == (WidModRecord(wid=expected),)
 
@@ -335,7 +342,7 @@ mods:
     assert isinstance(workshop, WidModRecord)
     assert isinstance(earlier, PidModRecord)
     assert isinstance(later, PidModRecord)
-    assert workshop.wid == "000123"
+    assert workshop.wid == "123"
     assert earlier.before[0].wid == "123"
     assert later.after[0].wid == "000000123"
     identities = (
@@ -349,35 +356,39 @@ mods:
 
 
 def test_workshop_identity_handles_heavily_zero_padded_ids(tmp_path: Path) -> None:
-    """Canonicalize valid padded IDs without converting huge strings to integers."""
+    """Canonicalize quoted padded IDs without converting them to huge integers."""
     padded = "0" * 5000 + "123"
-    module = parse_yaml(tmp_path, f"name: padded\nmods:\n  - wid: {padded}\n")
+    module = parse_yaml(tmp_path, f'name: padded\nmods:\n  - wid: "{padded}"\n')
     assert isinstance(module.mods[0], WidModRecord)
     assert module.mods[0].wid == padded
     assert module.mods[0].reference == WidReference("123")
     assert module.mods[0].reference.value == "123"
 
 
-def test_rejects_explicit_yaml_tags(tmp_path: Path) -> None:
-    """Reject explicit scalar tags as unsupported StrictYAML syntax."""
-    with pytest.raises(ModuleParseError, match="tag") as error:
-        parse_yaml(tmp_path, "name: workshop\nmods:\n  - wid: !!int 00123\n")
+def test_safe_standard_tags_are_supported_and_custom_tags_are_not(
+    tmp_path: Path,
+) -> None:
+    """Accept safe core tags and reject tags without a safe constructor."""
+    module = parse_yaml(
+        tmp_path,
+        "name: !!str workshop\nmods:\n  - wid: !!int 0x7b\n  - pid: !!str 'true'\n",
+    )
+    assert module.name == "workshop"
+    assert [record.reference for record in module.mods] == [
+        WidReference("123"),
+        PidModRecord(pid="true").reference,
+    ]
+    with pytest.raises(ModuleParseError) as error:
+        parse_yaml(tmp_path, "name: custom\nmods:\n  - pid: !custom package\n")
     assert error.value.line == 3
     assert error.value.column is not None
 
 
-@pytest.mark.parametrize("quoted", [False, True])
-def test_rejects_oversized_workshop_ids_as_module_parse_errors(
-    tmp_path: Path, quoted: bool
-) -> None:
-    """Reject enormous decimal IDs without leaking integer-conversion errors."""
+def test_oversized_quoted_workshop_ids_are_schema_errors(tmp_path: Path) -> None:
+    """Reject huge quoted decimal IDs using the length-safe domain validator."""
     digits = "9" * 5000
-    yaml_value = f'"{digits}"' if quoted else digits
     with pytest.raises(ModuleParseError) as error:
-        parse_yaml(tmp_path, f"name: workshop\nmods:\n  - wid: {yaml_value}\n")
-    assert error.value.location == "$"
-    assert error.value.line is None
-    assert error.value.column is None
+        parse_yaml(tmp_path, f'name: workshop\nmods:\n  - wid: "{digits}"\n')
     details = validation_details(error.value)
     assert len(details) == 1
     assert details[0]["loc"] == ("mods", 0, "wid", "wid")
@@ -385,28 +396,43 @@ def test_rejects_oversized_workshop_ids_as_module_parse_errors(
     assert "must not exceed" in details[0]["msg"]
 
 
-def test_yaml_scalar_words_remain_strings(tmp_path: Path) -> None:
-    """Keep boolean-, null-, and YAML 1.1-looking words as domain strings."""
+def test_oversized_native_integer_conversion_is_a_module_parse_error(
+    tmp_path: Path,
+) -> None:
+    """Translate ruamel's bounded Python integer conversion failure narrowly."""
+    digits = "9" * 5000
+    with pytest.raises(ModuleParseError, match="invalid YAML scalar value"):
+        parse_yaml(tmp_path, f"name: workshop\nmods:\n  - wid: {digits}\n")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["true", "false", "null", "123", "2025-01-02"],
+)
+@pytest.mark.parametrize("field", ["name", "pid", "loc"])
+def test_native_nonstring_scalars_are_rejected_for_text_fields(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    """Require YAML strings for fields whose domain values are textual."""
+    if field == "name":
+        source = f"name: {value}\n"
+    else:
+        source = f"name: demo\nmods:\n  - {field}: {value}\n"
+    with pytest.raises(ModuleParseError):
+        parse_yaml(tmp_path, source)
+
+
+def test_quoted_and_yaml_12_string_scalars_remain_text(tmp_path: Path) -> None:
+    """Preserve quoted scalar strings and YAML 1.2's plain ``yes`` spelling."""
     module = parse_yaml(
         tmp_path,
-        """name: on
-mods:
-  - pid: yes
-  - pid: true
-  - pid: false
-  - pid: null
-  - pid: no
-  - loc: off
-""",
+        'name: "true"\nmods:\n  - pid: "123"\n  - loc: "null"\n  - pid: yes\n',
     )
-    assert module.name == "on"
+    assert module.name == "true"
     assert module.mods == (
+        PidModRecord(pid="123"),
+        LocModRecord(loc=Path("null")),
         PidModRecord(pid="yes"),
-        PidModRecord(pid="true"),
-        PidModRecord(pid="false"),
-        PidModRecord(pid="null"),
-        PidModRecord(pid="no"),
-        LocModRecord(loc=Path("off")),
     )
 
 
@@ -417,8 +443,9 @@ mods:
         '"000"',
         "-1",
         "1.5",
-        "+123",
-        "1_000",
+        '"+123"',
+        '"1_000"',
+        '"0x7b"',
         '"1x"',
         "true",
         "18446744073709551616",
@@ -459,8 +486,8 @@ mods:
     )
     assert isinstance(spaced.mods[0], LocModRecord)
     assert spaced.mods[0].loc == Path("mods/my mod")
-    numeric = parse_yaml(tmp_path, "name: numeric_path\nmods:\n  - loc: 123\n")
-    assert numeric.mods[0].loc == Path("123")
+    with pytest.raises(ModuleParseError):
+        parse_yaml(tmp_path, "name: numeric_path\nmods:\n  - loc: 123\n")
 
 
 def test_comments_multiline_paths_and_windows_backslashes_are_plain_text(
@@ -540,26 +567,69 @@ mods:
     assert details[0]["type"] == "variant_key_error"
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        "name: flow_sequence\nmods: []\n",
-        "name: flow_mapping\nmods:\n  - {pid: a.mod}\n",
-        "name: anchored\nmods:\n  - &entry\n    pid: a.mod\n",
-        "name: aliased\nmods:\n  - *entry\n",
-    ],
-)
-def test_rejects_flow_tags_anchors_and_aliases(tmp_path: Path, source: str) -> None:
-    """Reject YAML features outside the StrictYAML module-file subset."""
+def test_accepts_flow_collections_anchors_aliases_and_merge_overrides(
+    tmp_path: Path,
+) -> None:
+    """Use standard collection styles, aliases, and explicit merge overrides."""
+    module = parse_yaml(
+        tmp_path,
+        """name: merged
+mods:
+  - &base {pid: base.mod, before: [{wid: +123}]}
+  - {<<: *base, pid: override.mod}
+  - *base
+""",
+    )
+    assert [
+        record.pid for record in module.mods if isinstance(record, PidModRecord)
+    ] == [
+        "base.mod",
+        "override.mod",
+        "base.mod",
+    ]
+    assert module.mods[1].before == (WidModReferenced(wid="123"),)
+    assert Module(name="flow_empty", mods=[]).mods == ()
+
+
+def test_cyclic_alias_in_recognized_module_value_is_controlled(
+    tmp_path: Path,
+) -> None:
+    """Reject cyclic recognized values through ordinary Pydantic validation."""
     with pytest.raises(ModuleParseError) as error:
-        parse_yaml(tmp_path, source)
-    assert error.value.line is not None
-    assert error.value.column is not None
+        parse_yaml(tmp_path, "name: cycle\nmods: &cycle\n  - *cycle\n")
+    assert error.value.location == "$"
 
 
-@pytest.mark.parametrize("value", ["null", "'{}'", '"not-a-list"'])
+def test_yaml_version_directives_are_honored_and_unsupported_versions_fail(
+    tmp_path: Path,
+) -> None:
+    """Default to YAML 1.2 and honor explicit supported 1.1 and 1.2 directives."""
+    assert parse_yaml(tmp_path, "name: yes\n").name == "yes"
+    assert parse_yaml(tmp_path, "%YAML 1.2\n---\nname: yes\n").name == "yes"
+    with pytest.raises(ModuleParseError):
+        parse_yaml(tmp_path, "%YAML 1.1\n---\nname: yes\n")
+    for version in ("1.0", "1.3"):
+        with pytest.raises(ModuleParseError, match="unsupported YAML version"):
+            parse_yaml(tmp_path, f"%YAML {version}\n---\nname: demo\n")
+
+
+def test_native_null_and_empty_sequences_are_empty_module_collections(
+    tmp_path: Path,
+) -> None:
+    """Normalize null and flow-empty collections at every opted-in field."""
+    module = parse_yaml(tmp_path, "name: empty\nmods: null\n")
+    assert module.mods == ()
+    module = parse_yaml(
+        tmp_path,
+        "name: constraints\nmods:\n  - pid: parent.mod\n"
+        "    before: null\n    after: []\n",
+    )
+    assert module.mods[0].before == module.mods[0].after == ()
+
+
+@pytest.mark.parametrize("value", ["true", "'{}'", '"not-a-list"'])
 def test_rejects_non_list_constraint_values(tmp_path: Path, value: str) -> None:
-    """Reject nulls, mappings, and scalars where constraint sequences are expected."""
+    """Reject nonempty scalar and mapping values where sequences are expected."""
     with pytest.raises(ModuleParseError):
         parse_yaml(
             tmp_path,
@@ -638,12 +708,14 @@ mods:
             "name: demo\nmods:\n  - pid: a.mod\n    before:\n"
             "      - wid: 1\n        wid: 2\n"
         ),
+        "name: demo\nmods:\n  - <<: &base {pid: base.mod}\n"
+        "    pid: one.mod\n    pid: two.mod\n",
     ],
 )
 def test_duplicate_yaml_keys_are_rejected_with_source_marks(
     tmp_path: Path, source: str
 ) -> None:
-    """Reject duplicate keys before StrictYAML can overwrite them."""
+    """Reject duplicate keys before the safe constructor can overwrite them."""
     with pytest.raises(ModuleParseError) as error:
         parse_yaml(tmp_path, source)
     assert error.value.line is not None
@@ -670,7 +742,7 @@ def test_accepts_utf8_bom_and_reports_decode_errors(tmp_path: Path) -> None:
 
 
 def test_yaml_syntax_errors_include_source_line_and_column(tmp_path: Path) -> None:
-    """Expose one-based source positions for syntax errors reported by StrictYAML."""
+    """Expose one-based source positions for syntax errors reported by ruamel."""
     with pytest.raises(ModuleParseError) as error:
         parse_yaml(tmp_path, "name: demo\nmods: [\n")
     assert error.value.line is not None
@@ -681,7 +753,7 @@ def test_yaml_syntax_errors_include_source_line_and_column(tmp_path: Path) -> No
 def test_invalid_yaml_control_characters_are_parse_errors(
     tmp_path: Path, character: str
 ) -> None:
-    """Convert StrictYAML reader failures for literal control characters."""
+    """Convert YAML reader failures for literal control characters."""
     path = write_module(tmp_path, f"name: demo\nmods:\n  - pid: a{character}b\n")
     with pytest.raises(ModuleParseError) as error:
         parse_module_yaml(path)
@@ -701,10 +773,17 @@ def test_empty_and_comment_only_documents_are_rejected(tmp_path: Path) -> None:
             parse_yaml(tmp_path, source)
 
 
-def test_nonmapping_yaml_root_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source", ["plain scalar root\n", "null\n", "---\n"])
+def test_nonmapping_yaml_root_is_rejected(tmp_path: Path, source: str) -> None:
     """Require one mapping at the document root before domain validation."""
     with pytest.raises(ModuleParseError, match="expected a YAML mapping"):
-        parse_yaml(tmp_path, "plain scalar root\n")
+        parse_yaml(tmp_path, source)
+
+
+def test_document_end_only_has_no_module_content(tmp_path: Path) -> None:
+    """Reject an end marker without module content as malformed YAML."""
+    with pytest.raises(ModuleParseError):
+        parse_yaml(tmp_path, "...\n")
 
 
 def test_deeply_nested_unknown_values_fail_with_a_controlled_error(

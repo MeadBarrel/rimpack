@@ -1,4 +1,4 @@
-"""Tests for immutable global settings, strict YAML, and file selection."""
+"""Tests for immutable global settings, safe YAML, and file selection."""
 
 import os
 import socket
@@ -120,6 +120,15 @@ def test_non_yaml_indentation_does_not_turn_scalar_roots_into_comments(
 
 
 @pytest.mark.parametrize("field", ["mods_path", "unknown"])
+def test_invalid_tagged_scalar_conversions_are_parse_errors(
+    tmp_path: Path, field: str
+) -> None:
+    """Translate malformed safe-tag conversions even inside ignored values."""
+    with pytest.raises(ConfigParseError, match="invalid YAML scalar value"):
+        parse_yaml(tmp_path, f"{field}: !!int nope\n")
+
+
+@pytest.mark.parametrize("field", ["mods_path", "unknown"])
 def test_out_of_range_unicode_yaml_escapes_are_parse_errors(
     tmp_path: Path, field: str
 ) -> None:
@@ -136,7 +145,7 @@ def test_unrelated_loader_value_errors_are_not_hidden(tmp_path: Path, monkeypatc
         """Simulate an unrelated internal exception with a matching message."""
         raise ValueError("chr() arg not in range(0x110000)")
 
-    monkeypatch.setattr(config, "load", broken_loader)
+    monkeypatch.setattr(config, "load_yaml", broken_loader)
     with pytest.raises(ValueError) as error:
         parse_config_yaml(path)
     assert not isinstance(error.value, ConfigParseError)
@@ -197,9 +206,9 @@ def test_direct_settings_accept_none_for_unset_overrides(field: str) -> None:
     assert getattr(settings, field) is None
 
 
-@pytest.mark.parametrize("value", [None, " ", "mods", 1, [""], ["\x00"]])
+@pytest.mark.parametrize("value", [" ", "mods", 1, [""], ["\x00"]])
 def test_direct_extra_mod_paths_reject_invalid_collections(value: object) -> None:
-    """Only an exactly empty scalar is an alternate empty-list spelling."""
+    """Reject whitespace strings, scalars, and malformed path entries."""
     with pytest.raises(ValidationError):
         Settings(extra_mod_paths=value)  # type: ignore[arg-type]
 
@@ -207,6 +216,7 @@ def test_direct_extra_mod_paths_reject_invalid_collections(value: object) -> Non
 def test_direct_extra_mod_paths_accept_emptyable_list_spellings() -> None:
     """Apply the shared EmptyableList behavior to direct Settings construction."""
     assert Settings(extra_mod_paths="").extra_mod_paths == ()  # type: ignore[arg-type]
+    assert Settings(extra_mod_paths=None).extra_mod_paths == ()  # type: ignore[arg-type]
     assert Settings(extra_mod_paths=[]).extra_mod_paths == ()  # type: ignore[arg-type]
     assert Settings(extra_mod_paths=()).extra_mod_paths == ()
     with pytest.raises(ValidationError):
@@ -273,9 +283,9 @@ def test_parses_all_fields_and_resolves_relative_paths(tmp_path: Path) -> None:
     assert result.diagnostics == ()
 
 
-@pytest.mark.parametrize("blank", ["", "''", '""'])
-def test_blank_extra_mod_paths_are_empty_tuples(tmp_path: Path, blank: str) -> None:
-    """Normalize empty scalar collection spellings without relaxing path values."""
+@pytest.mark.parametrize("blank", ["", "''", '""', "null", "~", "[]"])
+def test_emptyable_extra_mod_paths_are_empty_tuples(tmp_path: Path, blank: str) -> None:
+    """Normalize null, empty strings, and empty sequences without path coercion."""
     result = parse_yaml(tmp_path, f"extra_mod_paths: {blank} # empty roots\n")
 
     assert result.value == Settings()
@@ -297,18 +307,35 @@ def test_omitted_fields_use_schema_defaults(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("field", (*_PATH_FIELDS, "extra_mod_paths"))
-@pytest.mark.parametrize("scalar", ["123", "00123", "true", "false", "yes", "null"])
-def test_yaml_scalar_words_and_digits_remain_lexical_paths(
+@pytest.mark.parametrize(
+    "scalar", ["123", "00123", "true", "false", "null", "2025-01-02"]
+)
+def test_yaml_native_nonstring_scalars_are_rejected_as_paths(
     tmp_path: Path, field: str, scalar: str
 ) -> None:
-    """Prevent implicit YAML boolean, null, or numeric typing in path strings."""
+    """Reject implicitly typed values where settings require path text."""
     if field == "extra_mod_paths":
         source = f"extra_mod_paths:\n  - {scalar}\n"
     else:
         source = f"{field}: {scalar}\n"
+    with pytest.raises(ConfigParseError):
+        parse_yaml(tmp_path, source)
+
+
+@pytest.mark.parametrize("field", (*_PATH_FIELDS, "extra_mod_paths"))
+@pytest.mark.parametrize("scalar", ["123", "true", "null", "2025-01-02"])
+def test_quoted_scalar_spellings_remain_valid_path_text(
+    tmp_path: Path, field: str, scalar: str
+) -> None:
+    """Keep quoted numeric-, boolean-, null-, and date-looking paths textual."""
+    quoted = f'"{scalar}"'
+    source = (
+        f"extra_mod_paths:\n  - {quoted}\n"
+        if field == "extra_mod_paths"
+        else f"{field}: {quoted}\n"
+    )
     settings = parse_yaml(tmp_path, source).value
     expected = tmp_path / "profile" / scalar
-
     if field == "extra_mod_paths":
         assert settings.extra_mod_paths == (expected,)
     else:
@@ -331,6 +358,16 @@ def test_yaml_paths_reject_blank_whitespace_and_nul(
 
 
 @pytest.mark.parametrize("field", _PATH_FIELDS)
+@pytest.mark.parametrize("value", ["null", ""])
+def test_yaml_explicit_null_or_blank_optional_paths_are_invalid(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    """Keep omission as the only YAML spelling for an unset optional path."""
+    with pytest.raises(ConfigParseError, match="must be omitted"):
+        parse_yaml(tmp_path, f"{field}: {value}\n")
+
+
+@pytest.mark.parametrize("field", _PATH_FIELDS)
 def test_yaml_optional_path_fields_cannot_be_sequences(
     tmp_path: Path, field: str
 ) -> None:
@@ -342,7 +379,6 @@ def test_yaml_optional_path_fields_cannot_be_sequences(
 @pytest.mark.parametrize(
     "source",
     [
-        "extra_mod_paths: null\n",
         "extra_mod_paths: not-a-list\n",
         "extra_mod_paths: ' '\n",
         "extra_mod_paths:\n  nested: not-a-list\n",
@@ -571,7 +607,10 @@ def test_blank_and_comment_only_documents_use_defaults(
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("source", ["plain scalar root\n", "- sequence root\n"])
+@pytest.mark.parametrize(
+    "source",
+    ["plain scalar root\n", "- sequence root\n", "null\n", "---\n", "...\n"],
+)
 def test_rejects_nonmapping_documents(tmp_path: Path, source: str) -> None:
     """Require mappings for nonempty documents rather than scalar or list roots."""
     with pytest.raises(ConfigParseError) as error:
@@ -581,43 +620,124 @@ def test_rejects_nonmapping_documents(tmp_path: Path, source: str) -> None:
     assert error.value.location == "$"
 
 
+def test_accepts_native_yaml_collections_tags_anchors_aliases_and_merges(
+    tmp_path: Path,
+) -> None:
+    """Validate recognized values while retaining warnings for ignored fields."""
+    result = parse_yaml(
+        tmp_path,
+        """%YAML 1.2
+---
+defaults: &defaults {mods_path: mods, data_path: data}
+<<: *defaults
+rimworld_path: &game game
+workshop_path: !!str workshop
+extra_mod_paths: [extra/one, extra/two]
+unknown:
+  arbitrary: !!int 42
+  values: &values [true, null, 2025-01-02]
+  alias: *values
+""",
+    )
+    base = tmp_path / "profile"
+    assert result.value == Settings(
+        rimworld_path=base / "game",
+        workshop_path=base / "workshop",
+        data_path=base / "data",
+        mods_path=base / "mods",
+        extra_mod_paths=(base / "extra/one", base / "extra/two"),
+    )
+    assert result.diagnostics == (
+        UnknownConfigFieldDiagnostic("defaults"),
+        UnknownConfigFieldDiagnostic("unknown"),
+    )
+
+
+def test_ignored_config_values_remain_ignored_even_when_aliased_cyclically(
+    tmp_path: Path,
+) -> None:
+    """Do not validate or expand ignored config payloads beyond YAML loading."""
+    result = parse_yaml(tmp_path, "unknown: &cycle [*cycle]\n")
+    assert result.value == Settings()
+    assert result.diagnostics == (UnknownConfigFieldDiagnostic("unknown"),)
+
+
+def test_cyclic_alias_in_a_recognized_config_value_is_a_controlled_error(
+    tmp_path: Path,
+) -> None:
+    """Send recognized cyclic values through normal schema validation."""
+    with pytest.raises(ConfigParseError) as error:
+        parse_yaml(tmp_path, "extra_mod_paths: &cycle [*cycle]\n")
+    assert error.value.location == "$"
+
+
+def test_yaml_12_is_default_and_supported_directives_are_honored(
+    tmp_path: Path,
+) -> None:
+    """Treat plain ``yes`` as text by default and accept supported directives."""
+    assert parse_yaml(tmp_path, "mods_path: yes\n").value.mods_path == (
+        tmp_path / "profile" / "yes"
+    )
+    assert parse_yaml(tmp_path, "%YAML 1.2\n---\nmods_path: yes\n").value.mods_path == (
+        tmp_path / "profile" / "yes"
+    )
+    assert (
+        parse_yaml(tmp_path, '%YAML 1.1\n---\nmods_path: "yes"\n').value.mods_path
+        == tmp_path / "profile" / "yes"
+    )
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.3"])
+def test_rejects_unsupported_yaml_version_directives(
+    tmp_path: Path, version: str
+) -> None:
+    """Translate ruamel's resolver failure for unsupported YAML versions."""
+    with pytest.raises(ConfigParseError, match="unsupported YAML version") as error:
+        parse_yaml(tmp_path, f"%YAML {version}\n---\nmods_path: game\n")
+    assert error.value.line is None and error.value.column is None
+
+
 @pytest.mark.parametrize(
     "source",
     [
-        "%YAML 1.3\n---\nmods_path: game\n",
-        "%YAML 1.0\n---\nmods_path: game\n",
-        "?\n  - x\n  - y\n: value\n",
-        "unknown:\n  ?\n    - x\n    - y\n  : value\n",
-        "extra_mod_paths: []\n",
-        "unknown: {nested: value}\n",
-        "rimworld_path: !!str game\n",
-        "rimworld_path: &game game\n",
-        "rimworld_path: *game\n",
         "rimworld_path: first\nrimworld_path: second\n",
         "unknown: first\nunknown: second\n",
         "unknown:\n  nested: first\n  nested: duplicate\n",
+        "unknown:\n  <<: &base {nested: inherited}\n"
+        "  nested: first\n  nested: duplicate\n",
+        "unknown:\n  <<: &base {nested: inherited}\n"
+        "  ? [one, two]\n  : first\n  ? [one, two]\n  : second\n",
+        "unknown: !custom value\n",
         "rimworld_path: first\n---\nrimworld_path: second\n",
         "rimworld_path: [\n",
     ],
 )
-def test_rejects_unsupported_or_malformed_yaml_with_source_marks(
-    tmp_path: Path, source: str
-) -> None:
-    """Enforce StrictYAML syntax even inside fields that will later be ignored."""
+def test_rejects_invalid_yaml_with_source_marks(tmp_path: Path, source: str) -> None:
+    """Reject malformed syntax and duplicate explicit keys, including with merges."""
     with pytest.raises(ConfigParseError) as error:
         parse_yaml(tmp_path, source)
 
     assert error.value.path == tmp_path / "profile" / "settings.yml"
     assert error.value.location == "$"
-    if source.startswith("%YAML"):
-        assert error.value.message.startswith("unsupported YAML version")
-        assert error.value.line is None and error.value.column is None
-    elif source.startswith("?") or source.startswith("unknown:") and "  ?" in source:
-        assert error.value.message == "YAML mapping keys must be scalar strings"
-        assert error.value.line is None and error.value.column is None
-    else:
-        assert error.value.line is not None and error.value.line >= 1
-        assert error.value.column is not None and error.value.column >= 1
+    assert error.value.line is not None and error.value.line >= 1
+    assert error.value.column is not None and error.value.column >= 1
+
+
+def test_recognized_yaml_version_and_native_scalar_types_are_not_coerced(
+    tmp_path: Path,
+) -> None:
+    """Reject YAML 1.1 booleans in path fields while preserving quoted text."""
+    with pytest.raises(ConfigParseError):
+        parse_yaml(tmp_path, "%YAML 1.1\n---\nmods_path: yes\n")
+    assert parse_yaml(tmp_path, 'mods_path: "yes"\n').value.mods_path == (
+        tmp_path / "profile" / "yes"
+    )
+
+
+def test_rejects_nonstring_root_mapping_keys(tmp_path: Path) -> None:
+    """Require YAML mapping root keys to name schema fields as strings."""
+    with pytest.raises(ConfigParseError, match="mapping keys must be strings"):
+        parse_yaml(tmp_path, "?\n  - x\n  - y\n: value\n")
 
 
 def test_validation_errors_preserve_structured_pydantic_context(tmp_path: Path) -> None:
@@ -655,7 +775,7 @@ def test_accepts_utf8_bom_and_rejects_invalid_encoding(tmp_path: Path) -> None:
 def test_invalid_yaml_control_characters_are_config_errors(
     tmp_path: Path, character: str
 ) -> None:
-    """Handle StrictYAML's wrapped ReaderError only for invalid source characters."""
+    """Translate ruamel reader failures for invalid source characters."""
     path = write_config(tmp_path, f"rimworld_path: a{character}b\n")
 
     with pytest.raises(ConfigParseError) as error:
@@ -685,14 +805,14 @@ def test_invalid_controls_in_comment_only_documents_are_config_errors(
 def test_unrelated_yaml_library_errors_are_not_hidden(
     tmp_path: Path, monkeypatch, error: Exception
 ) -> None:
-    """Only translate known StrictYAML failures from their specific call frames."""
+    """Only translate known ruamel failures from their specific call frames."""
     path = write_config(tmp_path, "rimworld_path: game\n")
 
     def broken_loader(*args, **kwargs):
-        """Raise a matching exception without a StrictYAML-origin traceback."""
+        """Raise a matching exception without a ruamel-origin traceback."""
         raise error
 
-    monkeypatch.setattr(config, "load", broken_loader)
+    monkeypatch.setattr(config, "load_yaml", broken_loader)
     with pytest.raises(type(error)) as caught:
         parse_config_yaml(path)
     assert caught.value is error
@@ -701,30 +821,28 @@ def test_unrelated_yaml_library_errors_are_not_hidden(
 def test_unrelated_internal_attribute_errors_are_not_hidden(
     tmp_path: Path, monkeypatch
 ):
-    """The narrow StrictYAML workaround must not disguise unrelated parser bugs."""
+    """Narrow source-error translation must not disguise unrelated parser bugs."""
     path = write_config(tmp_path, "rimworld_path: game\n")
 
     def broken_loader(*args, **kwargs):
         """Model an unrelated loader AttributeError without ReaderError context."""
         raise AttributeError("unrelated parser bug")
 
-    monkeypatch.setattr(config, "load", broken_loader)
+    monkeypatch.setattr(config, "load_yaml", broken_loader)
     with pytest.raises(AttributeError, match="unrelated parser bug"):
         parse_config_yaml(path)
 
 
-def test_excessive_yaml_nesting_is_a_controlled_config_error(tmp_path: Path) -> None:
-    """Translate recursion failures even when deeply nested values are unknown."""
+def test_nested_ignored_yaml_values_have_no_custom_depth_budget(tmp_path: Path) -> None:
+    """Ignore valid nested values instead of imposing a parser resource limit."""
     depth = 256
     lines = ["unknown:"]
     lines.extend(" " * (2 * (level + 1)) + "nested:" for level in range(depth))
     lines.append(" " * (2 * (depth + 1)) + "value")
 
-    with pytest.raises(ConfigParseError) as error:
-        parse_yaml(tmp_path, "\n".join(lines) + "\n")
-
-    assert error.value.path == tmp_path / "profile" / "settings.yml"
-    assert error.value.location == "$"
+    result = parse_yaml(tmp_path, "\n".join(lines) + "\n")
+    assert result.value == Settings()
+    assert result.diagnostics == (UnknownConfigFieldDiagnostic("unknown"),)
 
 
 def test_default_selection_and_missing_load_do_not_create_settings(

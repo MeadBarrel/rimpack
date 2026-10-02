@@ -13,8 +13,7 @@ from typing import Annotated, Any, NoReturn
 
 from pydantic import ConfigDict, StrictStr, ValidationError, field_validator
 from pydantic.dataclasses import dataclass as validated_dataclass
-from strictyaml import YAMLError, load
-from strictyaml.ruamel.reader import ReaderError
+from ruamel.yaml.error import YAMLError
 
 from rimpack.sdk._validation import (
     EmptyableList,
@@ -22,6 +21,7 @@ from rimpack.sdk._validation import (
     validation_error_message,
     yaml_error_details,
 )
+from rimpack.sdk._yaml import load_yaml, yaml_load_failure
 from rimpack.sdk.errors import ParseError
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -144,6 +144,8 @@ class _WidRecordBase:
             character != "0" for character in value
         ):
             raise ValueError("Workshop ID must be a positive decimal value")
+        # Compare text rather than converting to int: quoted IDs may be heavily
+        # zero-padded and exceed Python's integer-string conversion limit.
         significant_digits = value.lstrip("0")
         if len(significant_digits) > len(_UINT64_MAX_TEXT) or (
             len(significant_digits) == len(_UINT64_MAX_TEXT)
@@ -279,17 +281,17 @@ def _empty_yaml_document(source: str) -> bool:
 
 
 def _yaml_error(path: Path, error: YAMLError) -> ModuleParseError:
-    """Convert a StrictYAML error and any available source mark to a parse error."""
+    """Convert a YAML source failure and any available mark to a parse error."""
     message, line, column = yaml_error_details(error)
     return ModuleParseError(path, "$", message, line=line, column=column)
 
 
 def parse_module_yaml(path: str | Path) -> Module:
-    """Parse one strict-subset YAML module file into an immutable Module.
+    """Parse one safe YAML module document into an immutable Module.
 
-    Scalar text stays lexical during parsing. Missing or exactly blank collection
-    fields become empty tuples; local ``loc`` values remain unresolved relative
-    to their eventual modpack-root resolution step. Invalid input raises
+    Native YAML scalar types pass to schema validation. Missing, null, and empty
+    collection fields become empty tuples; local ``loc`` values remain unresolved
+    relative to their eventual modpack-root resolution step. Invalid input raises
     ``ModuleParseError``; filesystem access errors remain ``OSError`` subclasses.
     """
     source_path = Path(path)
@@ -306,14 +308,14 @@ def parse_module_yaml(path: str | Path) -> Module:
         )
 
     try:
-        document = load(source_text).data
+        document = load_yaml(source_text)
     except YAMLError as error:
         raise _yaml_error(source_path, error) from error
-    except AttributeError as error:
-        reader_error = error.__context__
-        if not isinstance(reader_error, ReaderError):
+    except (AssertionError, OverflowError, ValueError) as error:
+        message = yaml_load_failure(error)
+        if message is None:
             raise
-        raise _yaml_error(source_path, reader_error) from error
+        raise ModuleParseError(source_path, "$", message) from error
     except RecursionError as error:
         raise ModuleParseError(source_path, "$", "YAML nesting is too deep") from error
 

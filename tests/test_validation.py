@@ -23,7 +23,7 @@ from pydantic import (
 )
 from pydantic.dataclasses import dataclass as validated_dataclass
 from pydantic_core import CoreSchema, core_schema
-from strictyaml import YAMLError
+from ruamel.yaml.error import YAMLError
 
 from rimpack.sdk._validation import (
     EmptyableList,
@@ -184,15 +184,21 @@ def test_emptyable_list_applies_to_future_collection_fields() -> None:
 
     empty = FutureSettings(arbitrary_rows="")
     assert empty.arbitrary_rows == ()
+    assert FutureSettings(arbitrary_rows=None).arbitrary_rows == ()
     assert FutureSettings(arbitrary_rows=[]).arbitrary_rows == ()
+    assert FutureSettings(arbitrary_rows=()).arbitrary_rows == ()
     assert FutureSettings(arbitrary_rows=("tuple",)).arbitrary_rows == ("tuple",)
+    collection_adapter = TypeAdapter(EmptyableList[StrictStr])
+    assert collection_adapter.validate_json("null") == ()
+    assert collection_adapter.validate_json('""') == ()
+    assert collection_adapter.validate_json("[]") == ()
 
     rows = ["one", "", "one"]
     parsed = FutureSettings(arbitrary_rows=rows)
     assert parsed.arbitrary_rows == ("one", "", "one")
     assert rows == ["one", "", "one"]
 
-    for invalid in (None, False, 0, {}, " ", "null", "[]", "items"):
+    for invalid in (False, 0, {}, " ", "null", "[]", "items"):
         with pytest.raises(ValidationError):
             FutureSettings(arbitrary_rows=invalid)
 
@@ -318,7 +324,7 @@ def test_all_variants_and_nested_constraints_preserve_order_and_values(
     ]
     assert module.mods[0].pid == "Main.Mod"
     assert module.mods[0].reference.value == "main.mod"
-    assert module.mods[1].wid == "000123"
+    assert module.mods[1].wid == "123"
     assert _normalized_module(module) == (
         "all_refs",
         (
@@ -361,7 +367,7 @@ def test_python_json_roundtrips_keep_concrete_variants_and_values(
 def test_string_scalars_reach_the_selected_variant_validator(
     tmp_path: Path,
 ) -> None:
-    """Treat scalar-looking YAML words as text before domain validation."""
+    """Send quoted text and native booleans to the selected field validator."""
     cases = (
         ("pid", '""', "value_error"),
         ("wid", "0", "value_error"),
@@ -378,38 +384,6 @@ def test_string_scalars_reach_the_selected_variant_validator(
         assert len(details) == 1
         assert details[0]["loc"] == ("mods", 0, key, key)
         assert details[0]["type"] == expected_type
-
-
-def test_boolean_null_numeric_and_date_like_scalars_are_text(
-    tmp_path: Path,
-) -> None:
-    """Preserve implicit-type-looking values as strings in domain records."""
-    module = parse_module_yaml(
-        _write_yaml(
-            tmp_path,
-            """name: lexical
-mods:
-  - pid: true
-  - pid: false
-  - pid: null
-  - pid: 123
-  - pid: 2025-99-99
-  - loc: false
-  - loc: null
-""",
-        )
-    )
-    assert [record.pid for record in module.mods[:5]] == [
-        "true",
-        "false",
-        "null",
-        "123",
-        "2025-99-99",
-    ]
-    assert isinstance(module.mods[5], LocModRecord)
-    assert module.mods[5].loc.as_posix() == "false"
-    assert isinstance(module.mods[6], LocModRecord)
-    assert module.mods[6].loc.as_posix() == "null"
 
 
 def test_missing_ambiguous_and_unknown_variant_keys_are_item_errors(
@@ -470,7 +444,6 @@ mods:
         ("name",),
         ("mods", 0, "pid", "pid"),
         ("mods", 0, "pid", "before", 0, "wid", "wid"),
-        ("mods", 0, "pid", "after"),
     ]
     assert error.message == "\n".join(
         f"{tuple(detail['loc'])!r}: {detail['msg']} [{detail['type']}]"

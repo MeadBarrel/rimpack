@@ -38,9 +38,9 @@ The module name. It must match the ASCII identifier pattern
 ### `mods`
 
 An optional ordered list of mods contained in the module. If omitted, it is treated
-as empty. An explicitly empty list may be written with a blank scalar (`mods:` or
-`mods: ""`); a whitespace-only value is not empty. Flow-style empty lists (`[]`)
-are not supported.
+as empty. It may also be empty as `null`, an exactly empty scalar (`mods:` or
+`mods: ""`), or an empty sequence (`[]`). A whitespace-only string is not empty.
+Block and flow sequences are supported; list order and repetitions are retained.
 
 Each mod is represented by a mapping with exactly one reference field (`pid`, `wid`,
 or `loc`), and may also contain `before` and/or `after`. No other fields are
@@ -59,8 +59,8 @@ Mod entries may contain additional fields in addition to their reference.
 
 An optional list of reference-only mappings. It adds a sorting constraint requiring
 this mod to load before the referenced mods. If omitted or specified as a blank
-scalar (`before:` or `before: ""`), it is treated as empty. Otherwise it must be a
-block-style YAML list; flow-style collections such as `[]` are not supported.
+scalar (`before:` or `before: ""`), null, or an empty sequence (`[]`), it is treated
+as empty. Otherwise it must be a YAML sequence; block and flow styles are supported.
 
 ```yaml
 name: example
@@ -76,8 +76,8 @@ mods:
 
 An optional list of reference-only mappings. It adds a sorting constraint requiring
 this mod to load after the referenced mods. If omitted or specified as a blank
-scalar (`after:` or `after: ""`), it is treated as empty. Otherwise it must be a
-block-style YAML list; flow-style collections such as `[]` are not supported.
+scalar (`after:` or `after: ""`), null, or an empty sequence (`[]`), it is treated
+as empty. Otherwise it must be a YAML sequence; block and flow styles are supported.
 
 ```yaml
 name: example
@@ -93,25 +93,19 @@ Sorting behavior, constraint resolution, and ordering semantics are described in
 
 ## Module parsing and validation
 
-A module file is one YAML document with a mapping root and a required `name` field.
-`mods` may be omitted; a missing or blank `mods`, `before`, or `after` value means
-an empty list. Empty files/documents, non-mapping roots, multiple documents, duplicate
-mapping keys, unknown fields, flow-style collections, explicit tags, YAML anchors,
-and YAML aliases are errors. Collections with entries use block-style YAML.
+A module file is one YAML document with a mapping root and a required string `name`.
+Empty files/documents, null or other non-mapping roots, multiple documents, duplicate
+mapping keys, and unknown module fields are errors.
 
-All untagged scalar values are read as text. Their validity depends on the destination
-field: for example, `pid: null` is the text `null`, while `wid: null` is invalid
-because it is not a positive decimal ID. YAML scalar spellings are not implicitly
-converted to booleans, numbers, nulls, or dates.
+`name`, `pid`, and `loc` require string values. Values interpreted as booleans,
+numbers, nulls, or dates are not strings; quote values when text is intended. `wid`
+accepts a positive uint64 as an integer value or as a quoted ASCII decimal-digit string.
+See [references.md](references.md#wid) for the identifier rules. For `mods`, `before`,
+and `after`, omission, null, an exactly empty string, and an empty sequence all mean an
+empty collection. Whitespace-only strings and other non-sequence values are invalid.
 
 Invalid values are errors; the parser does not silently discard mods or constraints
 and does not return a partially parsed module. Parsing and validation failures are
 reported as `ModuleParseError`; parser errors include line and column when available.
-`ModuleParseError.location` is `$` for module-level validation, and its message has
-one line per returned validation detail, in validation order. Each line includes a
-tuple location, which may contain union-branch names, the validation message, and its
-error type. Validation errors do not fabricate YAML line or column numbers. Raw input,
-validator context, and documentation URLs are omitted from rendered validation details,
-but this is not a secrecy guarantee because locations or validator messages may contain
-user data and the suppressed exception context remains inspectable. Filesystem access
+Validation errors do not fabricate YAML line or column numbers. Filesystem access
 errors remain filesystem errors.

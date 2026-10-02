@@ -1,9 +1,7 @@
 # Global configuration
 
-The SDK settings parser and loader implement the schema, validation, and path
-selection described here. CLI wiring, setup, and mod scanning remain planned.
-CLI configuration selection is specified in [cli.md](cli.md), and the interactive
-setup wizard is specified in [setup.md](setup.md).
+CLI configuration selection is specified in [cli.md](cli.md), and setup behavior
+is specified in [setup.md](setup.md).
 
 ## Scope and storage
 
@@ -14,7 +12,7 @@ The default settings file is `~/.rimpack/settings.yml` on every platform, where
 `~` denotes the current user's home directory. For example, on Windows:
 
 ```text
-C:\Users\lai\.rimpack\settings.yml
+C:\Users\<user>\.rimpack\settings.yml
 ```
 
 The CLI can select an alternative configuration folder or file through
@@ -60,18 +58,10 @@ mods_path: ~/RimWorldMods
 
 ## Path values and resolution
 
-Every supplied path must be a nonempty, non-whitespace string without NUL.
-Meaningful spaces are preserved; paths are not trimmed. Path syntax follows the
-host platform. On Windows, drive-relative forms such as `C:game` are rejected:
-use an absolute path such as `C:/game` or an ordinary relative path such as
-`game`. Rimpack does not use Windows's remembered per-drive working directories.
+Every supplied path must be a nonempty, non-whitespace YAML string without NUL.
 
-Omission is the only way to leave an optional path unset. A blank YAML value
-such as `rimworld_path:` or an empty string such as `rimworld_path: ""` is an
-error. The same path-value validation applies to entries in `extra_mod_paths`.
-For the collection itself, omission, a blank YAML value, or a quoted empty
-string means an empty list. Whitespace-only scalars and other non-list values
-are invalid; list order and duplicates are retained.
+Omission is the only way to leave an optional path unset. An explicitly supplied null
+or blank path, such as `rimworld_path: null`, `rimworld_path:` is an error.
 
 For every path value in the settings file:
 
@@ -80,31 +70,23 @@ For every path value in the settings file:
    selected settings file.
 3. Absolute paths remain absolute.
 
-Rimpack does not expand environment-variable expressions. Changing the command's
-working directory does not change the meaning of paths in the same settings
-file. The separate rules for locating the file through `--config` are defined in
-[cli.md](cli.md#config-selection).
-
 Resolving a path does not require its target to exist or be accessible. Schema
 validation and filesystem availability checks are separate operations.
 
-## Data and Mods properties
+## Effective Data and Mods paths
 
-The settings schema is represented by a dataclass exposing properties for the
-effective Data and Mods paths. The YAML fields are optional overrides; the
-properties apply the following defaults:
+The optional `data_path` and `mods_path` fields override these effective paths:
 
-- Effective Data path: the resolved `data_path` override, otherwise the resolved
+- Data: the resolved `data_path` override, otherwise the resolved
   `rimworld_path / Data`, otherwise `None`.
-- Effective Mods path: the resolved `mods_path` override, otherwise the resolved
+- Mods: the resolved `mods_path` override, otherwise the resolved
   `rimworld_path / Mods`, otherwise `None`.
 
-An explicit override does not require `rimworld_path` to be configured. Accessing
-these properties does not inspect the filesystem or perform discovery. Derived
-paths do not need to be written as explicit overrides in the settings file.
-
-An unavailable explicit override remains the selected path; it does not fall
-back to the installation-derived path.
+An explicit override does not require `rimworld_path` to be configured. Determining
+effective paths does not inspect the filesystem or perform discovery. Derived paths
+do not need to be written as explicit overrides in the settings file. An unavailable
+explicit override remains selected; it does not fall back to the installation-derived
+path.
 
 ## Loading and validation
 
@@ -117,9 +99,11 @@ Unrecognized field names produce warnings and are ignored. For example,
 `workshop_path`.
 
 Invalid YAML, an invalid document structure, or a malformed value in a recognized
-field is an error. Such errors must not be converted into empty settings or a
-successful partially loaded configuration. An existing settings file that cannot
-be read is also an error.
+field is an error. Settings must be one YAML document with a mapping root and string
+root keys. Duplicate mapping keys are errors. Unknown field values are ignored after
+YAML parsing; malformed YAML is still an error. Errors must not be converted into empty
+settings or a successful partially loaded configuration. An existing settings file
+that cannot be read is also an error.
 
 The CLI's handling of an absent default file versus an explicitly selected
 missing file is defined in [cli.md](cli.md#missing-configuration).
