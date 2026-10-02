@@ -1,3 +1,6 @@
+# Graphify-generated knowledge graph artifacts
+graphify-out/
+
 # Python-generated files
 __pycache__/
 *.py[oc]
