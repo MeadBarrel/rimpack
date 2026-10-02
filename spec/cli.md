@@ -1,11 +1,7 @@
 # Command-line interface
 
-This specification describes planned shared CLI configuration behavior and the
-setup command entry point. These CLI features are not yet implemented; the SDK
-settings loader implements the selection and missing-file rules below. Settings
-fields, defaults, and discovery-source behavior are specified in
-[config.md](config.md). The interactive setup contract is specified in
-[setup.md](setup.md).
+Settings fields, defaults, and discovery-source behavior are specified in
+[config.md](config.md). Setup behavior is specified in [setup.md](setup.md).
 
 ## Global configuration option
 
@@ -82,44 +78,5 @@ than silently choosing an installation.
 
 ## Setup
 
-The explicit configuration setup action is:
-
-```text
-rimpack setup
-```
-
-Setup is an interactive, rerunnable wizard for a required RimWorld installation
-path and an optional Workshop path. It uses the same configuration selection
-rules as every other command, explicitly discovers candidates, and supports
-manual path entry. Existing values are defaults; discovery does not silently
-replace them or arbitrarily choose among multiple candidates.
-
-The user confirms a final summary before setup saves the selected paths. Setup
-may create the selected configuration directory and file when needed, but makes
-no filesystem changes before confirmation. It preserves unrelated settings and
-content. The full selection, validation, cancellation, and saving contract is
-specified in [setup.md](setup.md).
-
-To set up an independent configuration:
-
-```text
-rimpack --config ~/profiles/testing/.rimpack setup
-rimpack --config ~/profiles/testing/settings.yaml setup
-```
-
-Setup with an override writes to the selected location, not the default location.
-Merely loading settings never invokes setup or installation discovery.
-
-Initial setup is interactive-only; without usable terminal input it reports an
-error and makes no filesystem changes. Exact prompt wording is not prescribed.
-
-## Diagnostics
-
-Configuration warnings and errors follow [config.md](config.md#loading-and-validation):
-unknown fields are reported and ignored, while malformed recognized values and
-configuration read failures are errors.
-
-During mod discovery, unavailable source folders are reported as warnings and
-skipped, as specified in [config.md](config.md#mod-discovery-sources). Those
-warnings alone do not make discovery fail; other errors, such as configuration
-validation failures, remain errors.
+The setup entry point is `rimpack setup`. It uses the configuration selection
+rules in this document; its behavior is specified in [setup.md](setup.md).

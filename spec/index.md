@@ -11,18 +11,13 @@ relevant to the behavior being changed.
 | Modules | [modules.md](modules.md) | Module fields, examples, ordering declarations, and parsing diagnostics. |
 | Mod references | [references.md](references.md) | `wid`, `pid`, `loc`, and the future `als` reference. |
 | Sorting | [sorting.md](sorting.md) | Preferred order, prefix protection, and ordering constraints. |
-| Global configuration (SDK implemented; discovery planned) | [config.md](config.md) | Settings schema, paths, defaults, validation, and discovery sources. |
-| CLI (planned) | [cli.md](cli.md) | Global `--config`, configuration selection, and the setup entry point. |
-| Setup (planned) | [setup.md](setup.md) | Interactive path selection, validation, reruns, review, and saving. |
+| Global configuration (SDK settings implemented; mod scanning planned) | [config.md](config.md) | Settings schema, paths, defaults, validation, and discovery sources. |
+| CLI (global configuration and setup entry point implemented) | [cli.md](cli.md) | Global `--config`, configuration selection, and the setup entry point. |
+| Setup (implemented) | [setup.md](setup.md) | Interactive path selection, validation, reruns, review, and saving. |
 | Aliases (future, out of scope) | [aliases.md](aliases.md) | Retained design for alias definitions and resolution. |
 
-SDK global settings parsing and loading are specified in [config.md](config.md).
-Mod scanning remains planned. Shared CLI configuration selection is specified in
-[cli.md](cli.md), and the setup wizard is specified in [setup.md](setup.md);
-CLI wiring and setup remain planned.
-
 Documents labeled planned or future describe intended behavior, not implemented
-features. Alias support remains outside the current scope.
+features.
 
 These specifications describe product intent. Implementation guidance and
 technical caveats are recorded separately in

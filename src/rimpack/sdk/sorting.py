@@ -177,7 +177,8 @@ def stable_toposort[T: Hashable](
     ties use the lexicographically smaller sequence of original positions.
 
     Duplicate input values raise ``ValueError`` and cyclic constraints raise
-    ``CycleError``. Missing constraint references are ignored. The input and
+    ``CycleError``. Missing constraint references are ignored. Items must have
+    stable hashing and equality, but need not be orderable. The input and
     constraint collections are read but never mutated, and returned values are
     the original objects supplied in ``items``.
     """
@@ -197,6 +198,8 @@ def stable_toposort[T: Hashable](
         return tuple(entry.item for entry in entries)
 
     topological = _topological_order(entries, successors, predecessors)
+    # A node's urgency is the earliest input rank among itself and its
+    # descendants, so prerequisites join the earliest prefix they must unlock.
     urgency = list(range(len(entries)))
     for source in reversed(topological):
         for target in successors[source]:

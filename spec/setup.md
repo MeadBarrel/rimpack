@@ -1,9 +1,7 @@
 # Setup
 
-This specification describes the planned interactive `rimpack setup` command.
-The CLI and settings layer are not yet implemented. Shared configuration
-selection is specified in [cli.md](cli.md); settings fields, defaults, and path
-resolution are specified in [config.md](config.md).
+Shared configuration selection is specified in [cli.md](cli.md); settings fields,
+defaults, and path resolution are specified in [config.md](config.md).
 
 ## Purpose and scope
 
@@ -21,18 +19,11 @@ Setup does not install RimWorld, download mods, or modify game or mod folders.
 Filesystem changes are limited to saving the selected settings file and creating
 its configuration directory when needed.
 
-## Invocation and configuration selection
+## Configuration selection
 
-```text
-rimpack setup
-rimpack --config ~/profiles/testing/.rimpack setup
-rimpack --config ~/profiles/testing/settings.yaml setup
-```
-
-The global `--config` option must appear before `setup`. The command uses the
-same [configuration selection rules](cli.md#config-selection) as other commands.
-An override writes only to the selected location, never to the default settings
-file as well.
+Setup uses the same [configuration selection rules](cli.md#config-selection) as
+other commands. An override writes only to the selected location, never to the
+default settings file as well.
 
 Setup may create a missing selected settings file, including one explicitly
 selected through `--config`. It begins with schema defaults when that file is

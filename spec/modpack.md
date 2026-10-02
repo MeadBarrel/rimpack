@@ -32,8 +32,5 @@ modules:
 
 The module format and examples are specified in [modules.md](modules.md).
 
-## Future aliases
-
-Mod aliases are planned for a future version and are out of current scope. The
-`aliases` modpack field and `als` references are not currently supported; the
-future design is retained in [aliases.md](aliases.md).
+The `aliases` modpack field is not currently supported. Its future behavior is
+specified in [aliases.md](aliases.md).

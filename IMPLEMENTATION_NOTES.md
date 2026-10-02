@@ -4,56 +4,38 @@ Technical decisions, library constraints, and implementation caveats belong here
 Specifications describe product intent; these notes record non-obvious guidance
 and caveats. Clearly distinguish implemented behavior from planned work.
 
-## Module YAML reading (implemented)
+## Module and settings YAML reading (implemented)
 
-- Internal reference constructors assume source records have already validated
-  their values; they are not input-validation boundaries. Workshop IDs retain
-  leading zeros in source records, but internal `WidReference` identities strip
-  them so numerically identical IDs match in ordering constraints. Normalize
-  as text to avoid integer conversion limits on heavily zero-padded valid IDs.
-- Use `EmptyableList` for future collection fields that intentionally accept a
-  blank value as empty, rather than adding parser field-name checks or global
-  coercion.
-- StrictYAML 1.7.3 may wrap an invalid-character `ReaderError` in an
-  `AttributeError`. Translate only when the chained context is a `ReaderError`;
-  unrelated `AttributeError`s must surface.
+The SDK uses fresh safe ruamel loaders through `sdk._yaml` and passes native YAML
+values to Pydantic. Keep scalar resolution consistent across SDK readers. Translate
+only recognized source parsing failures, retaining available marks; unrelated
+exceptions must surface. Unknown settings fields are ignored only after successful
+safe parsing; malformed settings must not become empty or partially loaded.
+
+Do not add custom alias-cycle, expansion, or parser resource limits without
+revisiting that decision; control naturally raised recursion failures at the SDK
+boundary. Internal reference constructors assume source records have already
+validated their values; they are not input-validation boundaries.
 
 ## Stable topological sorting (implemented)
 
-The sorter normalizes resolved `before` and `after` declarations into indexed,
-deduplicated adjacency sets. Missing references are ignored; indexed graph
-operations mean item values need stable hashing/equality but never ordering.
-For each node, urgency is the minimum original index among itself and all
-reachable descendants. A reverse-topological dynamic program computes these
-priorities in linear graph time rather than repeating reachability searches.
+The sorter protects each preferred prefix before optimizing for movement. Its
+deterministic candidate heuristic is deliberately not a global minimum inversion
+or movement optimizer. Preserve the prefix guarantee independently of tie-breaking
+or candidate improvements.
 
-Urgency groups encode the prefix guarantee: a node can enter an early group
-only if it is itself in that preferred prefix or is a prerequisite of an item
-in it. The implementation generates forward-priority and reverse-latest-sink
-Kahn candidates, then independently chooses the lower-inversion candidate for
-each group; ties use the lexicographically smaller original-index sequence.
-This deterministic best-of-two heuristic deliberately prioritizes prefix
-protection and does not guarantee a globally minimum inversion or movement
-metric. The indexed adjacency storage is `O(V + E)`; graph passes and candidate
-construction/scoring take `O(E + V log V)` time.
+## YAML editing (implemented)
 
-## YAML editing (planned)
+The round-trip editor uses ruamel's normal YAML resolver to keep untouched values
+consistent with SDK parsing. Preserve user comments and source-envelope data where
+supported, but do not promise formatting identity: semantic validation cannot
+detect lost or misattached comments.
 
-For future writers, omit empty optional list fields rather than emitting `[]`.
+## YAML writer guidance (planned)
 
-Use ruamel.yaml for comment-aware editing only if/when editing is implemented.
-StrictYAML remains the reader/validator and source of semantic values. Do not
-trust ruamel's implicitly typed values for lexical identifiers such as Workshop
-IDs. Revalidate serialized output with StrictYAML and compare decoded domain
-values with the intended result before saving.
+Omit empty optional list fields rather than emitting `[]`.
 
-Default ruamel serialization is not guaranteed to use StrictYAML-compatible
-syntax. Comment and formatting preservation need separate tests, especially for
-list insertion, removal, and reordering. Semantic validation cannot detect lost
-or misattached comments; removing an empty field must not silently discard
-unrelated comments. No editing functionality is implemented by this note.
-
-## CLI and setup dependencies (planned)
+## CLI and setup dependencies (implemented)
 
 The selected stack for the shared CLI and `rimpack setup` is:
 
@@ -65,17 +47,17 @@ The selected stack for the shared CLI and `rimpack setup` is:
   Prefer it directly over Questionary or InquirerPy, whose answer APIs return
   `Any` and would require an additional typed boundary.
 - Rich for readable warnings and final settings summaries.
-- ruamel.yaml for comment-aware settings updates, with StrictYAML retained as
-  the reader/validator. Follow the YAML editing guidance above; round-trip
-  serialization alone does not guarantee unchanged formatting.
+- ruamel.yaml for comment-aware settings updates, using the same normal scalar
+  resolution as the SDK safe reader. Follow the YAML editing guidance above;
+  round-trip serialization alone does not guarantee unchanged formatting.
 
 Keep prompt calls behind thin, typed Rimpack helpers for consistent styling,
 cancellation handling, and testing, without leaking `Any` into wizard logic.
 Path completion must not enforce filesystem existence: unavailable paths need
 an explicit warning-override step, as specified in `spec/setup.md`.
 
-This records the chosen stack only. Dependency additions and the CLI/setup
-implementation remain planned.
+The selected dependencies are declared in `pyproject.toml` and used by the
+current CLI and setup code.
 
 ## Steam RimWorld path discovery (implemented)
 
@@ -99,7 +81,3 @@ implementation remain planned.
   `workshop/content/294100` directory exists; an empty directory is valid.
   Results preserve the first discovered path spelling, deduplicate with Windows
   case-insensitive normalization, and sort by that normalized key.
-- The disposable `.probes/steam-path-discovery/` run measured a 3.29145 ms median
-  over ten warm runs on one Windows machine. This is evidence that bounded
-  metadata discovery was inexpensive on that warm filesystem cache, not a cold
-  start result or a guaranteed latency bound.
