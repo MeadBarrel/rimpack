@@ -5,11 +5,8 @@ from __future__ import annotations
 import io
 import re
 from dataclasses import dataclass
-from typing import Any
 
 from ruamel.yaml import YAML
-from ruamel.yaml.nodes import ScalarNode
-from ruamel.yaml.resolver import VersionedResolver
 from ruamel.yaml.scalarstring import (
     DoubleQuotedScalarString,
     ScalarString,
@@ -19,16 +16,6 @@ from ruamel.yaml.scalarstring import (
 
 class YamlEditError(ValueError):
     """Describe a YAML decoding, loading, or serialization failure."""
-
-
-class _LexicalScalarResolver(VersionedResolver):
-    """Keep implicit plain scalars as strings instead of resolving YAML types."""
-
-    def resolve(self, kind: Any, value: Any, implicit: Any) -> Any:
-        """Preserve plain scalar text, including empty and null-like words."""
-        if kind is ScalarNode and implicit[0]:
-            return super().resolve(kind, "lexical scalar", (False, False))
-        return super().resolve(kind, value, implicit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,15 +43,13 @@ def _decode_source(source: bytes | None) -> str:
 
 
 def create_round_trip_yaml(source: str) -> YAML:
-    """Create a lexical, quote-preserving YAML reader and dumper.
+    """Create a quote-preserving round-trip reader with native YAML types.
 
-    Implicit plain scalars remain strings, so values such as ``true``, ``1``,
-    ``null``, and an empty mapping key do not become Python booleans, numbers,
-    ``None``, or colliding mapping keys. Existing quote styles and explicit
-    start markers are retained where ruamel can represent them.
+    Untouched plain scalars retain ruamel's resolved Python values, while
+    existing quote styles and explicit start markers are preserved where the
+    round-trip representation supports them.
     """
     yaml = YAML(typ="rt")
-    yaml.Resolver = _LexicalScalarResolver
     yaml.preserve_quotes = True
     yaml.width = 1_000_000
     if _has_marker_line(source, "---"):

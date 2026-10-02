@@ -56,6 +56,11 @@ class ConfigSnapshot:
         return self.file.original
 
 
+def _root_merge_supplies(mapping: CommentedMap, key: str) -> bool:
+    """Return whether a retained root merge would provide ``key`` after edits."""
+    return any(key in source for source in (mapping.merge or ()))
+
+
 def _raise_concurrent_config_change(error: ConcurrentFileChange) -> NoReturn:
     """Translate a generic filesystem race into the established config exception."""
     raise ConcurrentConfigChange(str(error)) from error
@@ -168,8 +173,17 @@ def serialize_setup_settings(snapshot: ConfigSnapshot, proposed: Settings) -> by
         if desired is None:
             if field != "workshop_path":
                 raise ConfigEditError("setup cannot clear the installation path")
+            # Deleting this key cannot clear a value inherited from a merge;
+            # leave the merge source untouched rather than flattening or editing it.
+            if _root_merge_supplies(mapping, field):
+                raise ConfigEditError(
+                    "cannot clear workshop_path because a root YAML merge would "
+                    "supply it again; remove or edit the merge manually first"
+                )
             mapping.pop(field, None)
         else:
+            # Replace an anchored scalar instead of mutating it, so unrelated
+            # alias consumers keep their original value.
             mapping[field] = string_scalar(str(desired), mapping.get(field))
 
     try:

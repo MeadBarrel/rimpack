@@ -10,7 +10,7 @@ from typing import Sequence
 
 import pytest
 from rich.text import Text
-from strictyaml import load as strict_yaml_load
+from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
 from rimpack.cli import app, config_editing, file_editing, prompts, setup
@@ -116,25 +116,14 @@ def parse_candidate(source_path: Path, content: bytes) -> Settings:
     return parse_config_yaml(path).value
 
 
-def test_shared_round_trip_yaml_keeps_empty_and_plain_scalars_lexical() -> None:
-    """Keep empty, null-like, boolean-like, and numeric-like keys as strings."""
+def test_shared_round_trip_yaml_preserves_native_scalars_and_quote_styles() -> None:
+    """Retain ruamel's native null, boolean, and numeric scalar semantics."""
     source = (
-        "unknown:\n"
-        "  : blank key\n"
-        "  null: literal key\n"
-        "  true: boolean-looking key\n"
-        "  1: numeric-looking key\n"
-        "  empty:\n"
+        "unknown:\n  '': blank key\n  null: null\n  true: true\n  2: 2\n  empty: \"\"\n"
     )
     yaml = create_round_trip_yaml(source)
     mapping = yaml.load(source)
-    expected = {
-        "": "blank key",
-        "null": "literal key",
-        "true": "boolean-looking key",
-        "1": "numeric-looking key",
-        "empty": "",
-    }
+    expected = {"": "blank key", None: None, True: True, 2: 2, "empty": ""}
 
     assert mapping["unknown"] == expected
     output = StringIO()
@@ -142,7 +131,7 @@ def test_shared_round_trip_yaml_keeps_empty_and_plain_scalars_lexical() -> None:
     serialized = output.getvalue()
 
     assert "  '': blank key\n" in serialized
-    assert strict_yaml_load(serialized).data["unknown"] == expected
+    assert YAML(typ="safe", pure=True).load(serialized)["unknown"] == expected
 
 
 def test_manual_paths_expand_only_home_and_anchor_relative_input(
@@ -574,7 +563,7 @@ def test_cancelled_prompt_does_not_save_or_create_destination_parent(
 def test_unknown_fields_and_explicit_overrides_survive_comment_aware_edits(
     tmp_path: Path,
 ) -> None:
-    """Retain unknown nested lexical values, comments, and unrelated settings."""
+    """Retain unknown nested native values, comments, and unrelated settings."""
     selected_config = tmp_path / "settings.yml"
     original = (
         "# user configuration\n"
@@ -585,7 +574,7 @@ def test_unknown_fields_and_explicit_overrides_survive_comment_aware_edits(
         "    ../community\n"
         "unknown:\n"
         "  true: 00123\n"
-        "  1: yes\n"
+        "  2: yes\n"
         "  date: 2024-01-02\n"
         "  unicode: 日本語とcafé\n"
         "rimworld_path: './old game'\n"
@@ -617,7 +606,7 @@ def test_setup_round_trip_preserves_empty_mapping_key_and_sdk_reloads(
     """Keep a valid empty key distinct from a literal ``null`` key after setup."""
     path = tmp_path / "settings.yml"
     path.write_text(
-        "rimworld_path: old\nunknown:\n  : blank key\n  null: literal key\n",
+        "rimworld_path: old\nunknown:\n  '': blank key\n  null: null\n",
         encoding="utf-8",
     )
     snapshot = load_config_snapshot(path)
@@ -626,12 +615,12 @@ def test_setup_round_trip_preserves_empty_mapping_key_and_sdk_reloads(
     candidate = serialize_setup_settings(snapshot, proposed)
 
     assert parse_candidate(path, candidate) == proposed
-    decoded = strict_yaml_load(candidate.decode("utf-8-sig")).data
-    assert decoded["unknown"] == {"": "blank key", "null": "literal key"}
+    decoded = YAML(typ="safe", pure=True).load(candidate.decode("utf-8-sig"))
+    assert decoded["unknown"] == {"": "blank key", None: None}
 
 
 def test_round_trip_keeps_unrelated_settings_and_comments(tmp_path: Path) -> None:
-    """Preserve unrelated settings, lexical scalars, and comments through ruamel."""
+    """Preserve unrelated settings, typed scalars, and comments through ruamel."""
     path = tmp_path / "settings.yml"
     path.write_text(
         "# user configuration\n"
@@ -642,7 +631,7 @@ def test_round_trip_keeps_unrelated_settings_and_comments(tmp_path: Path) -> Non
         "data_path:    '../Data'   # explicit override\n"
         "unknown:\n"
         "  true: 00123\n"
-        "  1: yes\n"
+        "  2: yes\n"
         "  date: 2024-01-02\n"
         "  nested:\n"
         "    - 'value'\n"
@@ -657,13 +646,16 @@ def test_round_trip_keeps_unrelated_settings_and_comments(tmp_path: Path) -> Non
     output = candidate.decode("utf-8-sig")
 
     assert parse_candidate(path, candidate) == proposed
+    original_unknown = YAML(typ="safe", pure=True).load(path.read_text())["unknown"]
+    saved_unknown = YAML(typ="safe", pure=True).load(output)["unknown"]
+    assert saved_unknown == original_unknown
     for preserved in (
         "# user configuration",
         "# first mod",
         "# explicit override",
         "# keep note",
         "00123",
-        "1: yes",
+        "2: yes",
         "2024-01-02",
         "./one",
         "./two",
@@ -700,6 +692,78 @@ def test_round_trip_clears_workshop_from_supported_mapping_key_forms(
     assert "workshop_path" not in output
     assert "# user configuration" in output
     assert "# keep this note" in output
+
+
+def test_editing_an_anchored_managed_scalar_does_not_change_alias_consumers(
+    tmp_path: Path,
+) -> None:
+    """Replace the managed alias use without mutating its anchor or other users."""
+    path = tmp_path / "settings.yml"
+    path.write_text(
+        "shared: &shared old-game\nrimworld_path: *shared\nunknown: *shared\n",
+        encoding="utf-8",
+    )
+    snapshot = load_config_snapshot(path)
+    proposed = replace(snapshot.result.value, rimworld_path=tmp_path / "new-game")
+
+    candidate = serialize_setup_settings(snapshot, proposed)
+    mapping = create_round_trip_yaml(candidate.decode("utf-8-sig")).load(
+        candidate.decode("utf-8-sig")
+    )
+
+    assert parse_candidate(path, candidate) == proposed
+    assert mapping["shared"] == mapping["unknown"] == "old-game"
+    assert mapping["rimworld_path"] == str(tmp_path / "new-game")
+
+
+def test_editing_managed_fields_overrides_but_does_not_change_merge_sources(
+    tmp_path: Path,
+) -> None:
+    """Write a local override while preserving inherited root settings."""
+    path = tmp_path / "settings.yml"
+    path.write_text(
+        "defaults: &defaults {rimworld_path: old-game, workshop_path: old-workshop}\n"
+        "<<: *defaults\n",
+        encoding="utf-8",
+    )
+    snapshot = load_config_snapshot(path)
+    proposed = replace(snapshot.result.value, rimworld_path=tmp_path / "new-game")
+
+    candidate = serialize_setup_settings(snapshot, proposed)
+    mapping = create_round_trip_yaml(candidate.decode("utf-8-sig")).load(
+        candidate.decode("utf-8-sig")
+    )
+
+    assert parse_candidate(path, candidate) == proposed
+    assert mapping["defaults"]["rimworld_path"] == "old-game"
+    assert mapping["defaults"]["workshop_path"] == "old-workshop"
+    assert mapping["rimworld_path"] == str(tmp_path / "new-game")
+    assert mapping["workshop_path"] == "old-workshop"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "defaults: &defaults {rimworld_path: game, workshop_path: inherited}\n"
+        "<<: *defaults\n",
+        "defaults: &defaults {rimworld_path: game, workshop_path: inherited}\n"
+        "<<: *defaults\nworkshop_path: explicit\n",
+    ],
+)
+def test_clearing_workshop_is_refused_when_a_root_merge_would_restore_it(
+    tmp_path: Path, source: str
+) -> None:
+    """Require manual merge editing before clearing inherited Workshop paths."""
+    path = tmp_path / "settings.yml"
+    path.write_text(source, encoding="utf-8")
+    snapshot = load_config_snapshot(path)
+    proposed = replace(snapshot.result.value, workshop_path=None)
+
+    with pytest.raises(
+        config_editing.ConfigEditError,
+        match="root YAML merge.*remove or edit the merge manually",
+    ):
+        serialize_setup_settings(snapshot, proposed)
 
 
 def test_block_scalar_managed_path_round_trips_as_a_path(

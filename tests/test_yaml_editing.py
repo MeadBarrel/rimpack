@@ -15,8 +15,8 @@ from rimpack.cli.yaml_editing import (
 )
 
 
-def test_native_mapping_and_list_edits_keep_lexical_strings_and_quote_styles() -> None:
-    """Edit ruamel-native trees without config-specific coercion or cleanup."""
+def test_round_trip_edits_keep_native_values_and_quote_styles() -> None:
+    """Edit ruamel-native trees without coercion or config-specific cleanup."""
     source = (
         "root:\n"
         "  00123: leading-zero-id\n"
@@ -33,34 +33,34 @@ def test_native_mapping_and_list_edits_keep_lexical_strings_and_quote_styles() -
     mapping = document.root
     assert isinstance(mapping, CommentedMap)
 
-    lexical = mapping["root"]
-    assert set(lexical) == {
-        "00123",
+    native = mapping["root"]
+    assert set(native) == {
+        123,
         "",
-        "null",
+        None,
         "single",
         "double",
         "unicode",
         "control",
     }
-    assert lexical["00123"] == "leading-zero-id"
-    assert lexical[""] == "empty-key"
-    assert lexical["null"] == "literal-null-key"
-    assert isinstance(lexical["single"], SingleQuotedScalarString)
-    assert isinstance(lexical["double"], DoubleQuotedScalarString)
-    assert lexical["unicode"] == "日本語とcafé"
-    assert lexical["control"] == "line\nwith\ttab"
+    assert native[123] == "leading-zero-id"
+    assert native[""] == "empty-key"
+    assert native[None] == "literal-null-key"
+    assert isinstance(native["single"], SingleQuotedScalarString)
+    assert isinstance(native["double"], DoubleQuotedScalarString)
+    assert native["unicode"] == "日本語とcafé"
+    assert native["control"] == "line\nwith\ttab"
 
-    lexical["single"] = string_scalar("changed single", lexical["single"])
-    lexical["double"] = string_scalar("changed double", lexical["double"])
+    native["single"] = string_scalar("changed single", native["single"])
+    native["double"] = string_scalar("changed double", native["double"])
     mapping["items"].append(string_scalar("second\titem"))
     mapping["items"].append(string_scalar("third\nline"))
     output = dump_yaml_document(document, mapping)
     reloaded = load_yaml_document(output).root
 
-    assert reloaded["root"]["00123"] == "leading-zero-id"
+    assert reloaded["root"][123] == "leading-zero-id"
     assert reloaded["root"][""] == "empty-key"
-    assert reloaded["root"]["null"] == "literal-null-key"
+    assert reloaded["root"][None] == "literal-null-key"
     assert isinstance(reloaded["root"]["single"], SingleQuotedScalarString)
     assert isinstance(reloaded["root"]["double"], DoubleQuotedScalarString)
     assert reloaded["items"] == ["first", "second\titem", "third\nline"]
@@ -72,7 +72,7 @@ def test_generic_loader_does_not_change_empty_roots_or_optional_collections() ->
     assert load_yaml_document(b"").root is None
     document = load_yaml_document(b"empty_list: []\nnull_word: null\n")
     assert document.root["empty_list"] == []
-    assert document.root["null_word"] == "null"
+    assert document.root["null_word"] is None
 
 
 def test_create_yaml_document_wraps_supplied_root_without_parsing_source() -> None:
