@@ -147,8 +147,7 @@ must not be normalized or reformatted merely because setup was run. If the user
 makes no changes to an existing configuration, do not rewrite the file; report
 that no changes were needed.
 
-A save failure is an error, not successful setup. It must not leave an existing
-settings file replaced with incomplete content. On success, report the selected
+A save failure is an error, not successful setup. On success, report the selected
 settings-file location and whether it was saved or unchanged.
 
 ## Noninteractive use

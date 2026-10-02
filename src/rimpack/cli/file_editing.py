@@ -1,11 +1,10 @@
-"""Shared best-effort snapshot and atomic replacement helpers for regular files."""
+"""Shared best-effort snapshot helpers for regular files."""
 
 from __future__ import annotations
 
 import errno
 import os
 import stat
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -260,50 +259,6 @@ def check_file_snapshot_current(snapshot: FileSnapshot) -> None:
         )
 
 
-def save_file_snapshot(snapshot: FileSnapshot, content: bytes) -> None:
-    """Atomically replace a selected regular file with arbitrary bytes.
-
-    Parent creation happens only here, after the caller has chosen to save. The
-    existing mode is preserved, and staging uses the resolved physical parent so
-    it remains beside the target even when the selected spelling contains links
-    or ``..``. Complete bytes are flushed and fsynced before the final
-    best-effort check and ``os.replace``. Staging files are removed on failure.
-    These checks do not lock out writers or promise isolation between the final
-    check and replacement.
-    """
-    check_file_snapshot_current(snapshot)
-    destination = snapshot.target_path
-    parent = destination.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    staging_parent = parent.resolve(strict=True)
-    check_file_snapshot_current(snapshot)
-    mode = (
-        stat.S_IMODE(destination.stat().st_mode)
-        if snapshot.original is not None
-        else None
-    )
-    temporary_name: str | None = None
-    try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{destination.name}.", suffix=".tmp", dir=staging_parent
-        )
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if mode is not None:
-            os.chmod(temporary_name, mode)
-        check_file_snapshot_current(snapshot)
-        os.replace(temporary_name, destination)
-        temporary_name = None
-    finally:
-        if temporary_name is not None:
-            try:
-                os.unlink(temporary_name)
-            except FileNotFoundError:
-                pass
-
-
 __all__ = [
     "ConcurrentFileChange",
     "FileSnapshot",
@@ -311,5 +266,4 @@ __all__ = [
     "capture_file_snapshot",
     "check_file_snapshot_current",
     "check_file_snapshot_identity",
-    "save_file_snapshot",
 ]

@@ -1,21 +1,18 @@
-"""Shared file snapshots and atomic replacement behavior."""
+"""Shared regular-file snapshot and change-detection behavior."""
 
 from __future__ import annotations
 
 import os
 import socket
-import stat
 from pathlib import Path
 
 import pytest
 
-from rimpack.cli import file_editing
 from rimpack.cli.file_editing import (
     ConcurrentFileChange,
     capture_file_snapshot,
     check_file_snapshot_current,
     check_file_snapshot_identity,
-    save_file_snapshot,
 )
 
 
@@ -54,32 +51,6 @@ def test_absent_and_empty_files_have_distinct_snapshots(tmp_path: Path) -> None:
     assert empty.original == b""
 
 
-def test_generic_saver_handles_non_yaml_non_utf8_bytes_and_extensionless_paths(
-    tmp_path: Path,
-) -> None:
-    """Replace arbitrary bytes without applying YAML, encoding, or suffix rules."""
-    target = tmp_path / "settings"
-    target.write_bytes(b"\xff\x00before")
-    snapshot = capture_file_snapshot(target)
-    content = b"\x00\xfeafter\n"
-
-    save_file_snapshot(snapshot, content)
-
-    assert target.read_bytes() == content
-
-
-def test_capture_creates_nothing_and_save_creates_parent_directories(
-    tmp_path: Path,
-) -> None:
-    """Keep snapshotting read-only and defer parent creation until an explicit save."""
-    target = tmp_path / "new" / "nested" / "config"
-    snapshot = capture_file_snapshot(target)
-
-    assert not target.parent.exists()
-    save_file_snapshot(snapshot, b"new content")
-    assert target.read_bytes() == b"new content"
-
-
 def test_directories_and_special_files_are_rejected_before_reading(
     tmp_path: Path,
 ) -> None:
@@ -109,22 +80,20 @@ def test_directories_and_special_files_are_rejected_before_reading(
 def test_concurrent_modification_creation_and_deletion_are_detected(
     tmp_path: Path,
 ) -> None:
-    """Refuse to save over source bytes or path existence changed after capture."""
+    """Detect changed bytes and changed existence after snapshot capture."""
     target = tmp_path / "source"
     target.write_bytes(b"before")
     modified = capture_file_snapshot(target)
     target.write_bytes(b"changed")
     with pytest.raises(ConcurrentFileChange):
         check_file_snapshot_current(modified)
-    with pytest.raises(ConcurrentFileChange):
-        save_file_snapshot(modified, b"replacement")
     assert target.read_bytes() == b"changed"
 
     target.unlink()
     absent = capture_file_snapshot(target)
     target.write_bytes(b"another writer")
     with pytest.raises(ConcurrentFileChange, match="created"):
-        save_file_snapshot(absent, b"replacement")
+        check_file_snapshot_identity(absent)
     assert target.read_bytes() == b"another writer"
 
     target.unlink()
@@ -134,15 +103,15 @@ def test_concurrent_modification_creation_and_deletion_are_detected(
         check_file_snapshot_identity(recreated)
 
 
-def test_deleting_an_existing_file_is_detected_before_save(tmp_path: Path) -> None:
-    """Do not turn a captured existing file into a replacement after deletion."""
+def test_deleting_an_existing_file_is_detected_after_capture(tmp_path: Path) -> None:
+    """Detect that an existing file disappeared after its snapshot was read."""
     target = tmp_path / "source"
     target.write_bytes(b"before")
     snapshot = capture_file_snapshot(target)
     target.unlink()
 
     with pytest.raises(ConcurrentFileChange):
-        save_file_snapshot(snapshot, b"replacement")
+        check_file_snapshot_identity(snapshot)
     assert not target.exists()
 
 
@@ -180,78 +149,6 @@ def test_concurrent_replacement_is_detected_even_when_bytes_match(
 
     with pytest.raises(ConcurrentFileChange):
         check_file_snapshot_identity(snapshot)
-
-
-def test_change_during_staging_is_detected_and_temporary_file_is_removed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Preserve an observed competing edit that occurs before final replacement."""
-    target = tmp_path / "settings"
-    target.write_bytes(b"original")
-    snapshot = capture_file_snapshot(target)
-    original_fsync = file_editing.os.fsync
-    concurrent = b"concurrent edit"
-
-    def changed_fsync(descriptor: int) -> None:
-        """Simulate a writer immediately after staging bytes reach disk."""
-        original_fsync(descriptor)
-        target.write_bytes(concurrent)
-
-    monkeypatch.setattr(file_editing.os, "fsync", changed_fsync)
-    with pytest.raises(ConcurrentFileChange):
-        save_file_snapshot(snapshot, b"replacement")
-
-    assert target.read_bytes() == concurrent
-    assert list(tmp_path.glob(".settings.*.tmp")) == []
-
-
-def test_replacement_failure_cleans_staging_file_and_preserves_original(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Clean same-directory staging after an atomic-replace error."""
-    target = tmp_path / "settings"
-    target.write_bytes(b"original")
-    snapshot = capture_file_snapshot(target)
-
-    def fail_replace(source: object, destination: object) -> None:
-        """Inject an OS replacement failure after successful staging."""
-        raise OSError("injected replacement failure")
-
-    monkeypatch.setattr(file_editing.os, "replace", fail_replace)
-    with pytest.raises(OSError, match="injected replacement failure"):
-        save_file_snapshot(snapshot, b"replacement")
-
-    assert target.read_bytes() == b"original"
-    assert list(tmp_path.glob(".settings.*.tmp")) == []
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX file permission bits")
-def test_existing_mode_is_preserved(tmp_path: Path) -> None:
-    """Keep an existing file's permission bits on its atomic replacement."""
-    target = tmp_path / "settings"
-    target.write_bytes(b"original")
-    target.chmod(0o640)
-    snapshot = capture_file_snapshot(target)
-
-    save_file_snapshot(snapshot, b"replacement")
-
-    assert stat.S_IMODE(target.stat().st_mode) == 0o640
-
-
-def test_selected_file_symlink_is_retained_while_its_target_is_replaced(
-    tmp_path: Path,
-) -> None:
-    """Follow a selected file link for reads and replace its target on save."""
-    target = tmp_path / "real-file"
-    target.write_bytes(b"before")
-    selected = tmp_path / "selected-file"
-    make_symlink(selected, target)
-    snapshot = capture_file_snapshot(selected)
-
-    save_file_snapshot(snapshot, b"after")
-
-    assert selected.is_symlink()
-    assert target.read_bytes() == b"after"
 
 
 def test_dangling_symlinks_are_not_treated_as_absent(tmp_path: Path) -> None:

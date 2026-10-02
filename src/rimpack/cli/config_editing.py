@@ -12,8 +12,8 @@ from rimpack.cli.file_editing import (
     ConcurrentFileChange,
     FileSnapshot,
     capture_file_snapshot,
+    check_file_snapshot_current,
     check_file_snapshot_identity,
-    save_file_snapshot,
 )
 from rimpack.cli.yaml_editing import (
     YamlEditError,
@@ -193,9 +193,19 @@ def serialize_setup_settings(snapshot: ConfigSnapshot, proposed: Settings) -> by
 
 
 def save_config_snapshot(snapshot: ConfigSnapshot, content: bytes) -> None:
-    """Save arbitrary serialized bytes through the shared atomic file saver."""
+    """Write serialized bytes after checking the captured file snapshot.
+
+    Parent directories are created only after the initial validation and once a
+    save is explicitly requested. The final validation is a best-effort race
+    detector, not a lock; writing in place can leave partial content on failure.
+    """
     try:
-        save_file_snapshot(snapshot.file, content)
+        destination = snapshot.file.target_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        check_file_snapshot_current(snapshot.file)
+        # In-place writes avoid staging artifacts but may leave partial content
+        # if writing fails or is interrupted.
+        destination.write_bytes(content)
     except ConcurrentFileChange as error:
         _raise_concurrent_config_change(error)
 

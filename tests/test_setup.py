@@ -13,7 +13,7 @@ from rich.text import Text
 from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
-from rimpack.cli import app, config_editing, file_editing, prompts, setup
+from rimpack.cli import app, config_editing, prompts, setup
 from rimpack.cli.config_editing import (
     ConcurrentConfigChange,
     load_config_snapshot,
@@ -981,14 +981,24 @@ def test_snapshot_accepts_explicit_absence_but_distinguishes_empty_file(
     assert absent_snapshot.result.value == empty_snapshot.result.value == Settings()
 
 
-def test_concurrent_changes_are_refused_without_overwriting(tmp_path: Path) -> None:
-    """Compare the original source snapshot again before an atomic save."""
+def test_concurrent_changes_are_refused_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Detect changed source bytes before the direct write can run."""
     selected_config = tmp_path / "settings.yml"
     selected_config.write_text("rimworld_path: old\n", encoding="utf-8")
     snapshot = load_config_snapshot(selected_config)
     original = b"rimworld_path: concurrently changed\n"
     selected_config.write_bytes(original)
+    original_write = Path.write_bytes
 
+    def forbidden_write(path: Path, content: bytes) -> int:
+        """Fail if saving attempts a write to the concurrently edited file."""
+        if path == selected_config:
+            raise AssertionError("save must detect the edit before writing")
+        return original_write(path, content)
+
+    monkeypatch.setattr(Path, "write_bytes", forbidden_write)
     with pytest.raises(ConcurrentConfigChange):
         save_config_snapshot(snapshot, b"rimworld_path: replacement\n")
     assert selected_config.read_bytes() == original
@@ -1004,6 +1014,36 @@ def test_new_file_after_absent_snapshot_is_not_overwritten(tmp_path: Path) -> No
     with pytest.raises(ConcurrentConfigChange, match="created"):
         save_config_snapshot(snapshot, b"rimworld_path: replacement\n")
     assert path.read_bytes() == concurrent
+
+
+def test_direct_save_creates_parent_only_when_needed_and_leaves_no_artifact(
+    tmp_path: Path,
+) -> None:
+    """Write bytes directly after confirmation, creating only needed directories."""
+    path = tmp_path / "profile" / "nested" / "settings.yml"
+    snapshot = load_config_snapshot(path)
+    content = b"raw serialized bytes\x00\xff"
+
+    assert not path.parent.exists()
+    assert not path.parents[1].exists()
+    save_config_snapshot(snapshot, content)
+
+    assert path.read_bytes() == content
+    assert set(path.parent.iterdir()) == {path}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file permission bits")
+def test_direct_save_preserves_existing_file_permissions(tmp_path: Path) -> None:
+    """Write through the existing file so its permission bits remain intact."""
+    path = tmp_path / "settings.yml"
+    path.write_bytes(b"before")
+    path.chmod(0o640)
+    snapshot = load_config_snapshot(path)
+
+    save_config_snapshot(snapshot, b"after")
+
+    assert path.read_bytes() == b"after"
+    assert os.stat(path).st_mode & 0o777 == 0o640
 
 
 def test_changes_during_snapshot_read_are_detected(
@@ -1028,49 +1068,52 @@ def test_changes_during_snapshot_read_are_detected(
     assert original_read(path) == concurrent
 
 
-def test_changes_while_staging_are_not_overwritten(
+def test_failed_cli_save_reports_error_and_can_leave_partial_content(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Retain a competing edit observed after staging and clean the temporary file."""
+    """Surface a failed in-place write even when it has truncated the file."""
+    import rimpack.cli as cli
+
     path = tmp_path / "settings.yml"
-    path.write_bytes(b"rimworld_path: old\n")
-    snapshot = load_config_snapshot(path)
-    original_fsync = file_editing.os.fsync
-    concurrent = b"rimworld_path: concurrent writer\n"
+    path.write_text("rimworld_path: old\n", encoding="utf-8")
+    game = create_installation(tmp_path / "game")
+    ui = make_ui(choices=["manual", "none"], paths=[str(game)], confirmations=[True])
+    original_write = Path.write_bytes
+    partial = b"rimworld"
 
-    def changed_fsync(descriptor: int) -> None:
-        """Change the destination just before the final best-effort guard."""
-        original_fsync(descriptor)
-        path.write_bytes(concurrent)
+    def fail_after_partial_write(target: Path, content: bytes) -> int:
+        """Write a deterministic prefix, then simulate a filesystem failure."""
+        if target == path:
+            with target.open("wb") as stream:
+                stream.write(content[: len(partial)])
+            raise OSError("injected write failure")
+        return original_write(target, content)
 
-    monkeypatch.setattr(file_editing.os, "fsync", changed_fsync)
-    with pytest.raises(ConcurrentConfigChange):
-        save_config_snapshot(snapshot, b"rimworld_path: replacement\n")
-    assert path.read_bytes() == concurrent
-    assert list(tmp_path.glob(".settings.yml.*.tmp")) == []
+    def run_setup_with_scripted_ui(
+        config: str | Path | None, ignored_ui: object
+    ) -> SetupOutcome:
+        """Run the actual wizard with scripted responses through the CLI boundary."""
+        return setup.run_setup(
+            config,
+            ui,
+            discover=lambda: (),
+            cwd=tmp_path,
+            home=tmp_path,
+        )
 
+    monkeypatch.setattr(Path, "write_bytes", fail_after_partial_write)
+    monkeypatch.setattr(cli, "terminal_is_usable", lambda: True)
+    monkeypatch.setattr(cli, "PromptToolkitUI", lambda: ui)
+    monkeypatch.setattr(cli, "run_setup", run_setup_with_scripted_ui)
 
-def test_save_failure_cleans_temporary_file_and_retains_existing_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Remove staging files after replacement failure and preserve original bytes."""
-    selected_config = tmp_path / "settings.yml"
-    selected_config.write_text("rimworld_path: old\n", encoding="utf-8")
-    snapshot = load_config_snapshot(selected_config)
-    original = selected_config.read_bytes()
+    result = CliRunner().invoke(app, ["--config", str(path), "setup"])
 
-    def fail_replace(
-        source: str | bytes | os.PathLike[str], target: str | bytes | os.PathLike[str]
-    ) -> None:
-        """Inject a final atomic-replacement failure after the staging write."""
-        raise OSError("injected replacement failure")
-
-    monkeypatch.setattr(file_editing.os, "replace", fail_replace)
-    with pytest.raises(OSError, match="injected replacement failure"):
-        save_config_snapshot(snapshot, b"rimworld_path: replacement\n")
-
-    assert selected_config.read_bytes() == original
-    assert list(tmp_path.glob(".settings.yml.*.tmp")) == []
+    assert result.exit_code == 1
+    assert any(
+        kind == "error" and "Setup failed: injected write failure" in message
+        for kind, message in ui.messages
+    )
+    assert path.read_bytes() == partial
 
 
 def test_symlink_settings_file_keeps_link_and_replaces_its_target(
@@ -1096,7 +1139,7 @@ def test_symlink_settings_file_keeps_link_and_replaces_its_target(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX symlink and parent semantics")
 def test_setup_preserves_symlink_parent_path_for_snapshot_and_save(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     """Load and replace the same file when the selected path crosses a symlink."""
     profiles = tmp_path / "profiles"
@@ -1124,22 +1167,11 @@ def test_setup_preserves_symlink_parent_path_for_snapshot_and_save(
 
     proposed = replace(snapshot.result.value, rimworld_path=Path("/game-new"))
     candidate = serialize_setup_settings(snapshot, proposed)
-    original_mkstemp = file_editing.tempfile.mkstemp
-    staging_directories: list[Path] = []
-
-    def record_staging_directory(
-        *, prefix: str, suffix: str, dir: Path
-    ) -> tuple[int, str]:
-        """Record the physical staging directory before creating the temp file."""
-        staging_directories.append(Path(dir))
-        return original_mkstemp(prefix=prefix, suffix=suffix, dir=dir)
-
-    monkeypatch.setattr(file_editing.tempfile, "mkstemp", record_staging_directory)
     save_config_snapshot(snapshot, candidate)
 
-    assert staging_directories == [other.resolve()]
     assert parse_config_yaml(selected_file).value.rimworld_path == Path("/game-new")
     assert normalized_file.read_bytes() == unrelated_bytes
+    assert set(other.iterdir()) == {other / "child", selected_file}
 
 
 def test_cli_global_config_placement_and_help_do_not_load_settings(
