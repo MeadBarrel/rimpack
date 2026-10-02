@@ -3,25 +3,32 @@
 Settings fields, defaults, and discovery-source behavior are specified in
 [config.md](config.md). Setup behavior is specified in [setup.md](setup.md).
 
-## Global configuration option
+## Global options
 
-Every command uses the same global optional `--config PATH` option:
+Every command uses the same global optional `--config PATH` and `--verbose`
+options:
 
 ```text
-rimpack [--config PATH] <command> [command arguments and options]
+rimpack [--config PATH] [--verbose] <command> [command arguments and options]
 ```
 
-`--config` must appear before the subcommand. It is not a command-local option.
+Both options must appear before the subcommand. Neither is a command-local option.
 For example:
 
 ```text
 rimpack setup
 rimpack --config ./alternate/.rimpack setup
 rimpack --config ./alternate/custom.yaml setup
+rimpack --verbose setup
 ```
 
-The form `rimpack setup --config PATH` is not supported. The global placement
-rule applies to every command, including commands introduced later.
+The forms `rimpack setup --config PATH` and `rimpack setup --verbose` are not
+supported. The global placement rule applies to every command, including commands
+introduced later.
+
+`--verbose` shows DEBUG log records on stderr; without it, the CLI console logger
+shows WARNING and higher. The CLI also writes DEBUG logs to
+`~/.rimpack/logs/rimpack.log`, regardless of the selected `--config` path.
 
 ## Config selection
 

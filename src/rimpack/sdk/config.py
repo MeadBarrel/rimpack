@@ -1,6 +1,7 @@
 """Read immutable SDK settings without discovery, writing, or CLI side effects."""
 
 import errno
+import logging
 import stat
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -21,6 +22,8 @@ from rimpack.sdk.diagnostics import UnknownConfigFieldDiagnostic
 from rimpack.sdk.errors import ParseError
 
 _OPTIONAL_PATH_FIELDS = ("rimworld_path", "workshop_path", "data_path", "mods_path")
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_path(value: object) -> object:
@@ -178,6 +181,7 @@ def parse_config_yaml(path: str | Path) -> ConfigLoadResult:
     values fail the whole load; ordinary filesystem errors propagate unchanged.
     """
     source_path = _absolute(Path(path))
+    logger.debug("Reading settings file %s", source_path)
     _file_stat(source_path)
     try:
         source = source_path.read_text(encoding="utf-8-sig")
@@ -195,6 +199,7 @@ def parse_config_yaml(path: str | Path) -> ConfigLoadResult:
             Reader(source)
         except ReaderError as error:
             raise _yaml_error(source_path, error) from error
+        logger.debug("Loaded empty settings from %s", source_path)
         return ConfigLoadResult(Settings(), source_path)
     try:
         document = load_yaml(source)
@@ -243,11 +248,18 @@ def parse_config_yaml(path: str | Path) -> ConfigLoadResult:
         for field in fields(Settings)
         for value in (getattr(settings, field.name),)
     }
-    return ConfigLoadResult(Settings(**resolved), source_path, tuple(diagnostics))
+    result = ConfigLoadResult(Settings(**resolved), source_path, tuple(diagnostics))
+    logger.debug(
+        "Loaded settings from %s with %d unknown-field diagnostic(s)",
+        source_path,
+        len(diagnostics),
+    )
+    return result
 
 
 def load_config(config: str | Path | None = None) -> ConfigLoadResult:
     """Select and parse settings; only an absent default means empty settings."""
+    logger.debug("Loading settings (explicit config: %s)", config is not None)
     path = select_config_path(config)
     try:
         return parse_config_yaml(path)
@@ -256,4 +268,5 @@ def load_config(config: str | Path | None = None) -> ConfigLoadResult:
             raise
         if not _actually_absent(path):
             raise
+        logger.debug("Default settings file is absent; using schema defaults")
         return ConfigLoadResult(Settings(), path)

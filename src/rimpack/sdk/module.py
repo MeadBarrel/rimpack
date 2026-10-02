@@ -6,6 +6,7 @@ values; resolving those identities against installed mods or the modpack root
 is a later operation.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,8 @@ _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _DECIMAL_PATTERN = re.compile(r"[0-9]+\Z")
 _UINT64_MAX = 18_446_744_073_709_551_615
 _UINT64_MAX_TEXT = str(_UINT64_MAX)
+
+logger = logging.getLogger(__name__)
 
 
 def _validated_package_id(value: object) -> str:
@@ -295,6 +298,7 @@ def parse_module_yaml(path: str | Path) -> Module:
     ``ModuleParseError``; filesystem access errors remain ``OSError`` subclasses.
     """
     source_path = Path(path)
+    logger.debug("Reading module file %s", source_path)
     try:
         source_text = source_path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as error:
@@ -321,7 +325,9 @@ def parse_module_yaml(path: str | Path) -> Module:
 
     raw_module = _mapping_at(document, source_path)
     try:
-        return Module(**raw_module)
+        module = Module(**raw_module)
+        logger.debug("Parsed module file %s", source_path)
+        return module
     except ValidationError as error:
         _raise_validation_error(source_path, error)
     except RecursionError as error:

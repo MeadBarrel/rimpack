@@ -16,8 +16,10 @@ values remain unchanged. Data and Mods continue to derive from the installation
 unless explicit overrides exist; setup does not write derived paths as overrides.
 
 Setup does not install RimWorld, download mods, or modify game or mod folders.
-Filesystem changes are limited to saving the selected settings file and creating
-its configuration directory when needed.
+Setup-owned filesystem changes are limited to saving the selected settings file
+and creating its configuration directory when needed. Separately, CLI managed
+logging may create `~/.rimpack/logs/rimpack.log` on the first emitted log record;
+this does not require setup confirmation.
 
 ## Configuration selection
 

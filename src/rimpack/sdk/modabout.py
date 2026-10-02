@@ -6,6 +6,7 @@ required; other descriptive fields may be absent. See the RimWorld guide:
 https://rimworldwiki.com/wiki/Modding_Tutorials/About.xml
 """
 
+import logging
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from rimpack.sdk.diagnostics import (
     XmlContext,
     group_diagnostics,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -818,6 +821,7 @@ def parse_about_xml(path: str | Path) -> XmlParseResult[ModAbout]:
     XML syntax still raise errors. Other descriptive metadata may be absent and
     is represented by ``None`` or an empty tuple with diagnostics.
     """
+    logger.debug("Reading About.xml file %s", path)
     root = ET.parse(path).getroot()
     if _local_name(root.tag) != "ModMetaData":
         raise ValueError("About.xml root element must be <ModMetaData>")
@@ -935,4 +939,10 @@ def parse_about_xml(path: str | Path) -> XmlParseResult[ModAbout]:
         + group_diagnostics(XmlContext("ModMetaData"), _scan_unmodeled_fields(root))
         + group_diagnostics(XmlContext("ModMetaData"), _scan_attributes(root))
     )
-    return XmlParseResult(value, diagnostics)
+    result = XmlParseResult(value, diagnostics)
+    logger.debug(
+        "Parsed About.xml file %s with %d diagnostic(s)",
+        path,
+        len(diagnostics),
+    )
+    return result

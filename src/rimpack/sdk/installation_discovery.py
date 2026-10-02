@@ -8,6 +8,7 @@ run during SDK import.
 from __future__ import annotations
 
 import ctypes
+import logging
 import ntpath
 import os
 import sys
@@ -24,6 +25,8 @@ _REGISTRY_SUBKEY = r"SOFTWARE\Valve\Steam"
 
 _KNOWN_GAME_EXECUTABLES = ("RimWorldWin64.exe", "RimWorld.exe")
 _KNOWN_GAME_DATA_DIRECTORIES = ("Data", "RimWorldWin64_Data")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,6 +475,12 @@ def discover_rimworld_steam_installations() -> tuple[RimWorldSteamInstallation, 
     never walks a drive or mod directory. Each call reads current filesystem
     state and returns no results on non-Windows platforms.
     """
+    logger.debug("Starting explicit Steam RimWorld installation discovery")
     if not _is_windows():
+        logger.debug("Steam RimWorld discovery is unavailable on this platform")
         return ()
-    return _discover_from_roots(_steam_root_candidates())
+    installations = _discover_from_roots(_steam_root_candidates())
+    logger.debug(
+        "Steam RimWorld discovery found %d installation(s)", len(installations)
+    )
+    return installations

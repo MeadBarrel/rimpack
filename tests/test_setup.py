@@ -13,7 +13,7 @@ from rich.text import Text
 from ruamel.yaml import YAML
 from typer.testing import CliRunner
 
-from rimpack.cli import app, config_editing, prompts, setup
+from rimpack.cli import app, config_editing, logging_config, prompts, setup
 from rimpack.cli.config_editing import (
     ConcurrentConfigChange,
     load_config_snapshot,
@@ -1102,6 +1102,11 @@ def test_failed_cli_save_reports_error_and_can_leave_partial_content(
         )
 
     monkeypatch.setattr(Path, "write_bytes", fail_after_partial_write)
+    monkeypatch.setattr(
+        logging_config,
+        "managed_log_path",
+        lambda: tmp_path / ".rimpack" / "logs" / "rimpack.log",
+    )
     monkeypatch.setattr(cli, "terminal_is_usable", lambda: True)
     monkeypatch.setattr(cli, "PromptToolkitUI", lambda: ui)
     monkeypatch.setattr(cli, "run_setup", run_setup_with_scripted_ui)
@@ -1198,7 +1203,7 @@ def test_cli_global_config_placement_and_help_do_not_load_settings(
 
 
 def test_cli_passes_config_text_to_sdk_without_path_coercion(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Pass a global path argument unchanged to the setup selector boundary."""
     captured: list[str | None] = []
@@ -1208,6 +1213,11 @@ def test_cli_passes_config_text_to_sdk_without_path_coercion(
         captured.append(config if isinstance(config, str) else None)
         return SetupOutcome(Path("selected"), "unchanged")
 
+    monkeypatch.setattr(
+        logging_config,
+        "managed_log_path",
+        lambda: tmp_path / ".rimpack" / "logs" / "rimpack.log",
+    )
     monkeypatch.setattr("rimpack.cli.terminal_is_usable", lambda: True)
     monkeypatch.setattr("rimpack.cli.run_setup", fake_setup)
     result = CliRunner().invoke(app, ["--config", "not-yet-created.yaml", "setup"])
@@ -1310,6 +1320,11 @@ def test_nonterminal_cli_invocation_fails_before_discovery_or_file_creation(
         """Fail if terminal rejection reaches the setup or discovery layer."""
         raise AssertionError("nonterminal invocation must stop before setup")
 
+    monkeypatch.setattr(
+        logging_config,
+        "managed_log_path",
+        lambda: tmp_path / ".rimpack" / "logs" / "rimpack.log",
+    )
     monkeypatch.setattr("rimpack.cli.terminal_is_usable", lambda: False)
     monkeypatch.setattr("rimpack.cli.run_setup", forbidden_setup)
     result = CliRunner().invoke(app, ["--config", str(target), "setup"])
@@ -1509,6 +1524,11 @@ def test_cli_nonterminal_invocation_fails_before_creating_files(
 ) -> None:
     """Report manual configuration guidance without entering setup in a pipe."""
     target = tmp_path / "missing" / "settings.yml"
+    monkeypatch.setattr(
+        logging_config,
+        "managed_log_path",
+        lambda: tmp_path / ".rimpack" / "logs" / "rimpack.log",
+    )
     monkeypatch.setattr("rimpack.cli.terminal_is_usable", lambda: False)
     result = CliRunner().invoke(app, ["--config", str(target), "setup"])
 
